@@ -1,0 +1,57 @@
+# Reusable: turns on auto-merge for PRs labelled マージ予約, but only once their base is the default
+# branch. A stacked PR's base has no required checks, so auto-merge there would merge at once; this
+# waits for GitHub to retarget it after the PR below it is merged. See scripts/merge-reservation.mjs.
+# Call it from templates/merge-reservation.yml.
+name: マージ予約
+
+on:
+  workflow_call:
+    inputs:
+      ci_workflow:
+        description: >-
+          GITHUB_TOKEN のマージのあとで、既定ブランチに走らせ直す CI の workflow ファイル名
+          (workflow_dispatch を受け付けるもの)。空なら走らせない。
+        type: string
+        default: ''
+
+permissions: {}
+
+jobs:
+  reserve:
+    # The label itself, a base change, a merge, or a PR that becomes ready with the label on.
+    if: >-
+      github.event_name != 'pull_request_target' ||
+      (github.event.action == 'labeled' && github.event.label.name == 'マージ予約') ||
+      (github.event.action == 'edited' && github.event.changes.base != null) ||
+      (github.event.action == 'closed' && github.event.pull_request.merged) ||
+      github.event.action == 'ready_for_review' ||
+      github.event.action == 'reopened'
+    concurrency:
+      group: merge-reservation
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write # merge
+      pull-requests: write # turn on auto-merge, comment
+      actions: write # start CI on the default branch after a merge GITHUB_TOKEN made
+    steps:
+      # The script comes from this shared repository, never from the PR.
+      - uses: actions/checkout@v4
+        with:
+          repository: shiroinock/workflows
+          ref: main
+          sparse-checkout: scripts
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 既定ブランチに向いた PR に自動マージを入れる
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          CI_WORKFLOW: ${{ inputs.ci_workflow }}
+        run: node scripts/merge-reservation.mjs
