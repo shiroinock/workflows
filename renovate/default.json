@@ -62,11 +62,14 @@
       "enabled": false
     },
     {
-      "description": "共通の workflow が変わったら、すぐ1つの PR で配る(workflow を変える PR なので手でマージする)",
+      "description": "共通の workflow が変わったら、すぐ1つの PR で配り、検査が通れば Renovate が自動でマージする。workflow を変える PR は GITHUB_TOKEN ではマージできないが、Renovate のアプリはできる。中身は shiroinock/workflows の PR で見てある",
       "matchManagers": ["custom.regex"],
       "matchDepNames": ["shiroinock/workflows"],
       "groupName": "共通の workflow",
-      "schedule": ["at any time"]
+      "schedule": ["at any time"],
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true
     }
   ]
 }
