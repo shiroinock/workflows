@@ -5,7 +5,7 @@ shiroinock のリポジトリで共通に使う GitHub Actions の再利用ワ�
 | ワークフロー | すること |
 |---|---|
 | `claude.yml` | オーナーが issue・PR コメント・レビューで `@claude` と書くと Claude Code が動く。ほかの人のメンションでは動かない |
-| `claude-review.yml` | 同じリポジトリのブランチから来た、下書きでない PR を Claude Code がレビューする。直す指摘が無ければラベル「マージ予約」を付ける |
+| `claude-review.yml` | 同じリポジトリのブランチから来た、下書きでない PR を Claude Code がレビューする。ボットの PR は `allowed_bots`(既定は Renovate)に挙げたものだけ。直す指摘が無ければラベル「マージ予約」を付ける |
 | `merge-reservation.yml` | 「マージ予約」の付いた PR が既定ブランチに向いたら、自動マージ(マージコミット)を入れる。積み重ねた PR は、下の PR がマージされて付け替わるまで待つ |
 
 ## 入れ方
