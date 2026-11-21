@@ -53,6 +53,38 @@ jobs:
             echo "ラベル「マージ予約」は付いていない"
           fi
 
+      # The code under Claude's earlier comments has changed; close those threads so only the new
+      # review's comments stay open. Only threads Claude started are touched.
+      - name: 古くなった Claude の指摘を解決済みにする
+        if: github.event.action == 'synchronize'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          ids=$(gh api graphql -F owner="$OWNER" -F repo="$REPO" -F number="$PR" -f query='
+            query($owner: String!, $repo: String!, $number: Int!) {
+              repository(owner: $owner, name: $repo) {
+                pullRequest(number: $number) {
+                  reviewThreads(first: 100) {
+                    nodes { id isResolved isOutdated comments(first: 1) { nodes { author { login } } } }
+                  }
+                }
+              }
+            }' --jq '.data.repository.pullRequest.reviewThreads.nodes[]
+              | select(.isOutdated and (.isResolved | not) and .comments.nodes[0].author.login == "claude")
+              | .id')
+          if [ -z "$ids" ]; then
+            echo "解決済みにする指摘は無い"
+            exit 0
+          fi
+          for id in $ids; do
+            gh api graphql -F id="$id" -f query='
+              mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }' \
+              --silent || echo "::warning::$id を解決済みにできなかった"
+          done
+
   review:
     needs: unreserve
     # Same-repository branches only (only people who can push there), and not drafts: a draft PR is
