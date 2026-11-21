@@ -53,7 +53,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
 
       - name: 既定ブランチに向いた PR に自動マージを入れる
         env:
