@@ -13,6 +13,12 @@ on:
           (workflow_dispatch を受け付けるもの)。空なら走らせない。
         type: string
         default: ''
+      workflows_ref:
+        description: >-
+          scripts/ を取ってくる shiroinock/workflows の版。この workflow を SHA で呼ぶときは、同じ SHA を渡す
+          (渡さないと main の scripts/ が動き、呼ぶ側の固定が効かない)。
+        type: string
+        default: main
 
 permissions: {}
 
@@ -36,11 +42,12 @@ jobs:
       pull-requests: write # turn on auto-merge, comment
       actions: write # start CI on the default branch after a merge GITHUB_TOKEN made
     steps:
-      # The script comes from this shared repository, never from the PR.
+      # The script comes from this shared repository, never from the PR. Pin it to the same commit
+      # as the workflow itself; otherwise a caller that pins the workflow still runs main's script.
       - uses: actions/checkout@v4
         with:
           repository: shiroinock/workflows
-          ref: main
+          ref: ${{ inputs.workflows_ref }}
           sparse-checkout: scripts
           persist-credentials: false
 

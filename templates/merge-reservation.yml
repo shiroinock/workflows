@@ -24,3 +24,4 @@ jobs:
       actions: write
     # with:
     #   ci_workflow: ci.yml # must accept workflow_dispatch
+    #   workflows_ref: <SHA> # when the uses: line above is pinned to a SHA, pass the same SHA
