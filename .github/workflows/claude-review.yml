@@ -15,6 +15,12 @@ on:
       model:
         type: string
         default: opus
+      allowed_bots:
+        description: >-
+          PR を作ってもレビューするボット(カンマ区切り、`[bot]` は付けなくてよい)。共通の標準で依存の更新の
+          PR を出す Renovate を既定で入れる。空にすると、ボットの PR はレビューしない。
+        type: string
+        default: renovate
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -118,6 +124,8 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allow_fork_prs: 'false'
+          # The action refuses PRs opened by bots unless they are listed here.
+          allowed_bots: ${{ inputs.allowed_bots }}
           # Only the PR number goes into the prompt; Claude reads the title, body and diff with gh.
           prompt: |
             リポジトリ ${{ github.repository }} の PR #${{ github.event.pull_request.number }} をレビューしてください。
