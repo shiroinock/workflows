@@ -17,6 +17,21 @@
   "vulnerabilityAlerts": {
     "labels": ["依存の更新", "セキュリティ"]
   },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "shiroinock/workflows を SHA で固定した参照(uses: と workflows_ref)を、main の最新のコミットに上げる",
+      "managerFilePatterns": ["/^\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": [
+        "uses:\\s*shiroinock/workflows/\\.github/workflows/[^@\\s]+@(?<currentDigest>[0-9a-f]{40})",
+        "workflows_ref:\\s*(?<currentDigest>[0-9a-f]{40})"
+      ],
+      "depNameTemplate": "shiroinock/workflows",
+      "packageNameTemplate": "https://github.com/shiroinock/workflows",
+      "currentValueTemplate": "main",
+      "datasourceTemplate": "git-refs"
+    }
+  ],
   "packageRules": [
     {
       "description": "minor と patch は1つの PR にまとめる",
@@ -39,6 +54,19 @@
       "matchDepNames": ["python"],
       "matchUpdateTypes": ["major", "minor"],
       "enabled": false
+    },
+    {
+      "description": "共通の workflow の参照は customManagers だけで上げる(github-actions の manager と重ねない)",
+      "matchManagers": ["github-actions"],
+      "matchDepNames": ["shiroinock/workflows"],
+      "enabled": false
+    },
+    {
+      "description": "共通の workflow が変わったら、すぐ1つの PR で配る(workflow を変える PR なので手でマージする)",
+      "matchManagers": ["custom.regex"],
+      "matchDepNames": ["shiroinock/workflows"],
+      "groupName": "共通の workflow",
+      "schedule": ["at any time"]
     }
   ]
 }
