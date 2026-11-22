@@ -168,7 +168,7 @@ jobs:
                ```
                git commit -m "CI の失敗を直す" -m "<原因と、したことを1〜3行で>" -m "失敗した実行：${{ github.event.workflow_run.html_url }}" -m "Claude-CI-Fix: ${{ needs.triage.outputs.attempt }}"
                ```
-               push が断られたら(あいだにだれかが push した、など)、やり直さずに `needs_human` で返す。
+               push が断られたら(あいだにだれかが push した、など)、やり直さずに `needs_human` で返す(枝が進んでいれば、新しい CI がもう一度判断する)。
             6. 結果を構造化した出力で返す。`summary` には、原因と、したこと(または人にしてほしいこと)を日本語で短く書く。PR を読む人がそれだけで次に動けるように。
 
             ## してはいけないこと
@@ -220,6 +220,7 @@ jobs:
           PR: ${{ needs.triage.outputs.pr }}
           OWNER: ${{ github.repository_owner }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
+          FAILED: ${{ github.event.workflow_run.head_sha }}
           FIX_RESULT: ${{ needs.fix.result }}
           PUSHED: ${{ needs.fix.outputs.pushed }}
           RESULT: ${{ needs.fix.outputs.result }}
@@ -230,6 +231,11 @@ jobs:
           if [ "$PUSHED" = "true" ]; then
             gh pr comment "$PR" --body "$(printf 'CI の失敗（%s）を Claude が直して push しました。CI とレビューが走り直します。\n\n%s' "$RUN_URL" "$summary")"
             exit 0
+          fi
+          # Someone pushed while Claude was fixing: that push starts a newer CI, which decides
+          # again. Handing the PR to a person here would stop Claude from fixing the new commit.
+          if [ -z "$REASON" ] && [ "$(gh pr view "$PR" --json headRefOid --jq .headRefOid)" != "$FAILED" ]; then
+            echo "知らせない:直しているあいだに枝が進んだので、新しい CI に任せる"; exit 0
           fi
           case "$REASON" in
             "下書きの PR は、作っている人に任せる"|"ボットの PR では、枝のコマンドを Claude のトークンのそばで動かさない"|"すでに人に渡している")
