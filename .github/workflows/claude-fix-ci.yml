@@ -1,7 +1,9 @@
 # Reusable: when the CI of a PR fails, Claude Code reads the failure, fixes the branch and pushes.
 # When the failure needs a person (a decision, a secret, a flaky runner), or the fixes run out,
 # it says so on the PR, mentions the owner and labels it 人の手が要る. Call it from
-# templates/claude-fix-ci.yml, triggered by workflow_run of the CI.
+# templates/claude-fix-ci.yml, triggered by workflow_run of every workflow ("**"): whatever the
+# repository names its CI, a failed run that a PR started is taken here. Runs from other events
+# (deploys on push, schedules) and the shared workflows that are not code checks are skipped.
 #
 # Claude commits and pushes inside the action, where git is set up with the Claude GitHub App's
 # token, so that the push starts the CI and the review again (a push with GITHUB_TOKEN would
@@ -23,6 +25,12 @@ on:
       model:
         type: string
         default: opus
+      skip_workflows:
+        description: >-
+          直しにいかないワークフローのファイル名(空白区切り。例 "e2e.yml deploy-preview.yml")。
+          Claude のレビュー(claude-code-review.yml)と、アクションの固定(pinact.yml)は、これに書かなくても飛ばす。
+        type: string
+        default: ''
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -56,7 +64,20 @@ jobs:
           BRANCH: ${{ github.event.workflow_run.head_branch }}
           SHA: ${{ github.event.workflow_run.head_sha }}
           MAX: ${{ inputs.max_attempts }}
+          WORKFLOW_PATH: ${{ github.event.workflow_run.path }}
+          SKIP: ${{ inputs.skip_workflows }}
         run: |
+          # The review fails on purpose while findings remain, and pinact can only be fixed in
+          # .github/workflows, which Claude does not touch here: neither is a CI to fix.
+          workflow=${WORKFLOW_PATH%%@*}
+          workflow=${workflow##*/}
+          for skip in claude-code-review.yml pinact.yml $SKIP; do
+            if [ "$workflow" = "$skip" ]; then
+              echo "直しにいかない:$workflow は直す対象のワークフローではない"
+              echo "try=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
           pr=$(gh pr list --head "$BRANCH" --state open --json number,headRefOid,isDraft,author,labels \
             --jq "map(select(.headRefOid == \"$SHA\")) | first // empty")
           if [ -z "$pr" ]; then
