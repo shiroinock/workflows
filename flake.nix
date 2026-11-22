@@ -63,6 +63,8 @@
             echo "== node --check"
             node --check scripts/merge-reservation.mjs
             node --check scripts/harvest-findings.mjs
+            echo "== shellcheck: scripts"
+            shellcheck -s bash scripts/*.sh
             echo "== ast-grep: the shared rules and their tests"
             if find static-rules/rules -name '*.yml' | grep -q .; then
               ast-grep test --config static-rules/sgconfig.yml --skip-snapshot-tests
@@ -71,9 +73,42 @@
             fi
           '';
         };
+        # Common settings for the owner's repositories, with templates/ of the same version.
+        repo-baseline = pkgs.writeShellApplication {
+          name = "repo-baseline";
+          runtimeInputs = [
+            pkgs.gh
+            pkgs.jq
+            pkgs.coreutils
+            pkgs.gnugrep
+            pkgs.gawk
+          ];
+          # op (1Password CLI) comes from PATH when it is there; without it the secret is skipped.
+          bashOptions = [ ];
+          text = ''
+            export TEMPLATES_DIR="''${TEMPLATES_DIR:-${./templates}}"
+            ${builtins.readFile ./scripts/repo-baseline.sh}
+          '';
+        };
+        repo-new = pkgs.writeShellApplication {
+          name = "repo-new";
+          runtimeInputs = [
+            pkgs.gh
+            pkgs.jq
+            pkgs.coreutils
+            pkgs.git
+            repo-baseline
+          ];
+          bashOptions = [ ];
+          text = builtins.readFile ./scripts/repo-new.sh;
+        };
       in
       {
         packages.lint = lint;
+        packages.repo-baseline = repo-baseline;
+        packages.repo-new = repo-new;
+        apps.repo-baseline = flake-utils.lib.mkApp { drv = repo-baseline; };
+        apps.repo-new = flake-utils.lib.mkApp { drv = repo-new; };
         # Called by .github/workflows/pinact.yml in other repositories, at the version locked here.
         packages.pinact = pkgs.pinact;
         # Called by .github/workflows/static-rules.yml in other repositories, and locally.
