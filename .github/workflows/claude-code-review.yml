@@ -1,0 +1,31 @@
+# Claude Code reviews this repository's own PRs, with the shared workflow in this repository (the
+# same one other repositories call from templates/claude-code-review.yml). A PR that changes
+# .github/workflows is not reviewed (Claude Code Action runs only when the workflows match the
+# default branch's), so most PRs here are read and merged by hand; PRs to static-rules/, scripts/
+# and the documents are reviewed.
+name: Claude のレビュー
+
+on:
+  # pull_request (not pull_request_target): a fork's PR gets no secrets, and is skipped too.
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions: {}
+
+jobs:
+  review:
+    # The same commit as this file; the newer $/ syntax is not used until it is confirmed for
+    # reusable workflows.
+    uses: ./.github/workflows/claude-review.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write # the nits job collects minor findings in an issue
+      actions: write
+      id-token: write
+    with:
+      review_focus: |
+        - ここの変更は、`@main` で呼ぶすべてのリポジトリにすぐ届く。呼ぶ側のリポジトリが壊れないか、入力の既定値やテンプレートとの食い違いがないか。
+        - `static-rules/` のルールは、誤検知が少ないか、`message`・`note` が日本語で分かるか、`fix:` が意味を変えないか、テストに引っかかる例と引っかからない例があるか。非公開のリポジトリのコードを写していないか。
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

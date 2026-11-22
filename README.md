@@ -48,6 +48,14 @@ Claude のレビュー(PR ごとにトークンを使う)が繰り返し出す�
 - ワークフローを変える PR では、Claude Code Action が既定ブランチと同じ内容か確かめるため、その PR のレビューは走らない。そのときはレビューの検査を通った扱いにし、理由を PR に1度だけコメントする。手で見てマージする。マージしたあとの PR から動く。
 - 積み重ねた PR では向き先の枝の workflow が使われるので、向き先が古いままだと同じ理由でレビューが走らない。PR の差に workflow の変更が無いのにレビューが走らなかったときは、ジョブを失敗にして見えるようにしている。
 
+## このリポジトリの Claude
+
+ここにある共通の workflow を、このリポジトリ自身からも呼んでいる(`claude-code-review.yml` と `claude-mention.yml`。同じリポジトリの `./.github/workflows/…` を呼ぶので、PR の版の workflow が動く)。
+
+- レビュー:`.github/workflows` を変える PR は Claude Code Action がレビューしないので、ここの PR の多くは通った扱いになり、手で見てマージする。`static-rules/`・`scripts/`・文書だけを変える PR はレビューされる。マージ予約の workflow は置いていないので、「マージ予約」が付いても自動マージは入らず、手でマージする。
+- `@claude`:issue「ルール候補」で `@claude` と書くと、ルールを足す PR を頼める。
+- シークレット `CLAUDE_CODE_OAUTH_TOKEN` と Claude の GitHub App が要る(`rule-harvest.yml` と同じもの)。
+
 ## このリポジトリの検査
 
 ここの変更は、`@main` で呼ぶすべてのリポジトリにすぐ届く。そのため PR ごとに CI(`lint`)で次を確かめ、必須のチェックにしている。道具と版は `flake.nix` と `flake.lock` で決まり、手元でも同じものが流れる。

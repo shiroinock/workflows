@@ -1,0 +1,33 @@
+# The owner's @claude in an issue, a PR comment or a review of this repository runs Claude Code,
+# with the shared workflow in this repository (other repositories call it from
+# templates/claude.yml). For example, @claude on an issue labelled ルール候補 asks for the PR that
+# adds the rule.
+name: Claude
+
+on:
+  # Only the owner's comments start Claude (the if in claude.yml), and the job holds read-only
+  # permissions; the comment text never reaches a shell.
+  issue_comment: # zizmor: ignore[dangerous-triggers]
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+  issues:
+    types: [opened, assigned]
+
+permissions: {}
+
+jobs:
+  claude:
+    # The same commit as this file; the newer $/ syntax is not used until it is confirmed for
+    # reusable workflows.
+    uses: ./.github/workflows/claude.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      actions: read
+      id-token: write
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

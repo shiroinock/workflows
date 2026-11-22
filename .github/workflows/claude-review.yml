@@ -226,7 +226,10 @@ jobs:
           gh label create マージ予約 --color 0e8a16 \
             --description "レビュー済み。向き先が main になったら自動マージを入れる" 2>/dev/null || true
           gh pr edit "$PR" --add-label マージ予約
-          gh workflow run merge-reservation.yml --ref "$DEFAULT_BRANCH"
+          # shiroinock/workflows itself has no マージ予約 caller (its merge-reservation.yml is the
+          # shared one, which takes no workflow_dispatch); such a PR keeps the label and is merged by hand.
+          gh workflow run merge-reservation.yml --ref "$DEFAULT_BRANCH" ||
+            echo "::warning::マージ予約の workflow を起動できなかった(templates/merge-reservation.yml を置いていない?)。自動マージは入らないので、手でマージする"
 
   # The check to make required: it passes only when Claude reviewed this push and found nothing to
   # fix, so a PR with findings cannot be merged, by hand or otherwise. The review job itself ends

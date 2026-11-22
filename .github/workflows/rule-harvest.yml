@@ -197,7 +197,7 @@ jobs:
                evidence($p; $owner) +
                ["",
                 "## 進め方", "",
-                "- 採用するなら、置き場所の順番(`static-rules/README.md`)に沿って進めます。組み込みのルールなら `ts-template` と各リポジトリの設定を変える PR を、ast-grep なら `static-rules/rules/` にルールとテストを足す PR を出します。手元の Claude Code にこの issue の URL を渡して頼めます。",
+                "- 採用するなら、置き場所の順番(`static-rules/README.md`)に沿って進めます。組み込みのルールなら `ts-template` と各リポジトリの設定を変える PR を、ast-grep なら `static-rules/rules/` にルールとテストを足す PR を出します。この issue に `@claude` と書くか、手元の Claude Code にこの issue の URL を渡して頼めます(ルールの PR はここで、ほかのリポジトリの設定の PR は手元で)。",
                 "- 見送るなら、理由を書いて「Close as not planned」で閉じます。同じ形の指摘が見つかっても、もう出しません。採用して閉じたあとに同じ形がまた見つかったときは、ルールが効いていないので新しく開きます。",
                 "",
                 "[この候補を出した実行](\($run))"]) | join("\n")' <<<"$c")
