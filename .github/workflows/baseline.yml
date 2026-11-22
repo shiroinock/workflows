@@ -1,0 +1,60 @@
+# Once a week, puts the common settings into every repository of the owner with repo-baseline
+# (scripts/repo-baseline.sh): the templates/ a repository lacks come as a PR (an empty repository
+# gets them as its first commit), and the merge settings and the ruleset are set. A repository
+# made with repo-new already has them; this catches the ones made otherwise (in the browser, with
+# plain gh repo create) and spreads templates added here later. Repositories with the topic
+# no-baseline are left alone.
+#
+# BASELINE_TOKEN: a fine-grained token of the owner on all repositories with write access to
+# Contents, Pull requests and Workflows, and Administration for the settings and the ruleset.
+# Without it nothing runs. CLAUDE_CODE_OAUTH_TOKEN is not set from here (1Password is not reachable);
+# a repository without it is only reported. The log is public, so private repositories are not named.
+name: 共通の設定を入れる
+
+on:
+  schedule:
+    - cron: '30 0 * * 1' # Monday 9:30 JST, after ルール候補を集める
+  workflow_dispatch:
+    inputs:
+      repos:
+        description: 入れるリポジトリ(空白区切り)。空なら全部
+        type: string
+        default: ''
+
+permissions: {}
+
+concurrency:
+  group: baseline
+  cancel-in-progress: false
+
+jobs:
+  baseline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read # check out the repository
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+      - name: repo-baseline を流す
+        env:
+          GH_TOKEN: ${{ secrets.BASELINE_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          REPOS: ${{ inputs.repos }}
+          BASELINE_HIDE_PRIVATE: '1'
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::シークレット BASELINE_TOKEN が無いので、何もしない"
+            exit 0
+          fi
+          args=()
+          for r in $REPOS; do
+            if [[ ! "$r" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              echo "::error::リポジトリの名前として読めない:$r"
+              exit 1
+            fi
+            args+=("$r")
+          done
+          nix run .#repo-baseline -- "${args[@]}"
