@@ -123,7 +123,10 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
-      pull-requests: read
+      # label the PR 人の手が要る in the last step, while this job still holds the concurrency
+      # group (the Claude GitHub App's token in reach here can do more than this already)
+      pull-requests: write
+      issues: write # create the label
       actions: read # read the failed run's logs
       id-token: write # the action exchanges it for the Claude GitHub App's token
     outputs:
@@ -134,7 +137,8 @@ jobs:
       # Several workflows can fail on the same commit, and each sends its own workflow_run. The
       # concurrency above only queues the later ones, so check again once this one holds it:
       # the branch may have moved (Claude's fix from the earlier one), or the PR may have been
-      # handed to a person. Then there is nothing left to do here.
+      # handed to a person (the earlier fix labels it before releasing the group). Then there is
+      # nothing left to do here.
       - name: まだ直しにいくかを確かめ直す
         id: gate
         env:
@@ -263,6 +267,24 @@ jobs:
           else
             echo "pushed=false" >> "$GITHUB_OUTPUT"
           fi
+
+      # Hand the PR to a person here, not in report: the next fix waiting for this concurrency
+      # group starts as soon as this job ends, and its check must already see the label. report
+      # then comments and mentions the owner. If the branch moved meanwhile, the newer CI decides.
+      - name: 直せなかったら、人に渡すラベルを付ける
+        if: always() && steps.gate.outputs.stale == '' && steps.push.outputs.pushed != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ needs.triage.outputs.pr }}
+          FAILED: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [ "$(gh pr view "$PR" --json headRefOid --jq .headRefOid)" != "$FAILED" ]; then
+            echo "ラベルは付けない:枝が進んだので、新しい CI に任せる"; exit 0
+          fi
+          gh label create 人の手が要る --color d93f0b \
+            --description "CI の失敗を Claude が直せなかった。人が見る" 2>/dev/null || true
+          gh pr edit "$PR" --add-label 人の手が要る
 
   # Says what happened on the PR. Hands it to a person when Claude could not fix it.
   report:
