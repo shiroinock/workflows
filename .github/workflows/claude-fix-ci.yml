@@ -3,9 +3,10 @@
 # it says so on the PR, mentions the owner and labels it 人の手が要る. Call it from
 # templates/claude-fix-ci.yml, triggered by workflow_run of the CI.
 #
-# Claude only edits files. The commit and the push are made by a later step, with the Claude
-# GitHub App's token, so that the push starts the CI and the review again (a push with
-# GITHUB_TOKEN would not).
+# Claude commits and pushes inside the action, where git is set up with the Claude GitHub App's
+# token, so that the push starts the CI and the review again (a push with GITHUB_TOKEN would
+# not). The action revokes that token when it ends, so no later step can push with it. Claude may
+# run only a bare `git push`, to the PR's branch set up beforehand; force-pushing is not allowed.
 #
 # Security: the job runs the branch's own commands (npm ci, the tests) with the Claude token in
 # reach. It therefore only runs for branches of this repository whose PR was opened by a person,
@@ -117,6 +118,16 @@ jobs:
         with:
           node-version-file: ${{ hashFiles('.node-version') != '' && '.node-version' || 'package.json' }}
 
+      # A bare `git push` then goes to the PR's branch and nowhere else.
+      - name: PR の枝を用意する
+        env:
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          git switch -q -c "$BRANCH"
+          git config "branch.$BRANCH.remote" origin
+          git config "branch.$BRANCH.merge" "refs/heads/$BRANCH"
+          git config push.default upstream
+
       - name: Claude Code で直す
         id: claude
         uses: anthropics/claude-code-action@v1
@@ -138,56 +149,42 @@ jobs:
                - シークレット、外のサービス、権限、ランナーの不調、たまにしか落ちないテストなど、コードの外に原因がある。
                - `.github/workflows` を変えないと直らない。
                - 手元で直ったことを確かめられない。
-            5. 結果を構造化した出力で返す。`summary` には、原因と、したこと(または人にしてほしいこと)を日本語で短く書く。PR を読む人がそれだけで次に動けるように。
+            5. 直したら、`git add` で直したファイルだけを入れ、次の形でコミットして、`git push` で push する(引数は付けない。上流はこの PR の枝にしてある)。`.github/workflows` と `node_modules` は入れない。
+               ```
+               git commit -m "CI の失敗を直す" -m "<原因と、したことを1〜3行で>" -m "失敗した実行：${{ github.event.workflow_run.html_url }}" -m "Claude-CI-Fix: ${{ needs.triage.outputs.attempt }}"
+               ```
+               push が断られたら(あいだにだれかが push した、など)、やり直さずに `needs_human` で返す。
+            6. 結果を構造化した出力で返す。`summary` には、原因と、したこと(または人にしてほしいこと)を日本語で短く書く。PR を読む人がそれだけで次に動けるように。
 
             ## してはいけないこと
-            - コミット・push・PR やラベルの操作。直したファイルは、このあとのステップがコミットして push します。
+            - 手順 5 の形でないコミットと push、force-push、ほかの枝への push、PR やラベルの操作。
             - テストを消す・飛ばす、検査をゆるめる、期待する値を落ちた結果に合わせるだけの変更。
           claude_args: >-
             --model ${{ inputs.model }}
             --permission-mode default
             --json-schema '{"type":"object","properties":{"result":{"type":"string","enum":["fixed","needs_human"]},"summary":{"type":"string"}},"required":["result","summary"]}'
-            --allowedTools "Read,Glob,Grep,Edit,Write,Task,Agent,Bash(gh run view:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(npm ci:*),Bash(npm install:*),Bash(npm run:*),Bash(npm test:*),Bash(npx:*),Bash(node:*)"
-            --disallowedTools "Bash(git push:*),Bash(git commit:*),Bash(gh pr edit:*),Bash(gh pr merge:*),Bash(gh pr comment:*)"
+            --allowedTools "Read,Glob,Grep,Edit,Write,Task,Agent,Bash(gh run view:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git add:*),Bash(git commit:*),Bash(git push),Bash(npm ci:*),Bash(npm install:*),Bash(npm run:*),Bash(npm test:*),Bash(npx:*),Bash(node:*)"
+            --disallowedTools "Bash(git push --force:*),Bash(git push -f:*),Bash(git push origin:*),Bash(gh pr edit:*),Bash(gh pr merge:*),Bash(gh pr comment:*)"
 
-      # Claude's text never reaches a shell: only the result is compared, and the summary is read
-      # from the environment.
-      - name: 直したファイルをコミットして push する
+      # Whether Claude's commit reached the PR's branch: the branch moved past the failed commit
+      # to a commit carrying this attempt's trailer.
+      - name: push できたか確かめる
         id: push
-        if: >-
-          steps.claude.outputs.structured_output != '' &&
-          fromJSON(steps.claude.outputs.structured_output).result == 'fixed'
+        if: always() && steps.claude.outcome != 'skipped'
         env:
-          TOKEN: ${{ steps.claude.outputs.github_token }}
-          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           BRANCH: ${{ github.event.workflow_run.head_branch }}
+          FAILED: ${{ github.event.workflow_run.head_sha }}
           ATTEMPT: ${{ needs.triage.outputs.attempt }}
-          RUN_URL: ${{ github.event.workflow_run.html_url }}
-          SUMMARY: ${{ fromJSON(steps.claude.outputs.structured_output).summary }}
         run: |
-          git add -A
-          if git diff --cached --quiet; then
-            echo "直したと言ったが、ファイルの変更が無い"
+          head=$(gh api "repos/$GH_REPO/branches/$BRANCH" --jq .commit.sha)
+          message=$(gh api "repos/$GH_REPO/commits/$head" --jq .commit.message)
+          if [ "$head" != "$FAILED" ] && grep -qx "Claude-CI-Fix: $ATTEMPT" <<<"$message"; then
+            echo "pushed=true" >> "$GITHUB_OUTPUT"
+          else
             echo "pushed=false" >> "$GITHUB_OUTPUT"
-            exit 0
           fi
-          if git diff --cached --name-only | grep -q '^\.github/workflows/'; then
-            echo "::error::.github/workflows の変更は push しない"
-            echo "pushed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          git -c user.name='claude[bot]' -c user.email='claude[bot]@users.noreply.github.com' \
-            commit -q -F - <<EOF
-          CI の失敗を直す
-
-          $SUMMARY
-
-          失敗した実行：$RUN_URL
-          Claude-CI-Fix: $ATTEMPT
-          EOF
-          # Not a force push: if someone pushed meanwhile, this fails and their push decides.
-          git push "https://x-access-token:${TOKEN}@github.com/${REPO}.git" "HEAD:refs/heads/${BRANCH}"
-          echo "pushed=true" >> "$GITHUB_OUTPUT"
 
   # Says what happened on the PR. Hands it to a person when Claude could not fix it.
   report:
@@ -230,7 +227,7 @@ jobs:
           elif [ "$FIX_RESULT" != "success" ]; then
             why="直しのジョブが途中で失敗しました（実行のログを見てください）。"
           else
-            why="直したファイルを push できませんでした（変更が無い、workflow の変更だった、またはあいだに push があった）。"
+            why="直したと返しましたが、PR の枝に Claude のコミットが届いていません（push が断られた、あいだに push があった、など）。"
           fi
           gh label create 人の手が要る --color d93f0b \
             --description "CI の失敗を Claude が直せなかった。人が見る" 2>/dev/null || true
