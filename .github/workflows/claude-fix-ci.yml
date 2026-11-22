@@ -126,15 +126,42 @@ jobs:
     outputs:
       result: ${{ steps.claude.outputs.structured_output }}
       pushed: ${{ steps.push.outputs.pushed }}
+      stale: ${{ steps.gate.outputs.stale }}
     steps:
+      # Several workflows can fail on the same commit, and each sends its own workflow_run. The
+      # concurrency above only queues the later ones, so check again once this one holds it:
+      # the branch may have moved (Claude's fix from the earlier one), or the PR may have been
+      # handed to a person. Then there is nothing left to do here.
+      - name: まだ直しにいくかを確かめ直す
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ needs.triage.outputs.pr }}
+          FAILED: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          pr=$(gh pr view "$PR" --json state,headRefOid,labels)
+          if [ "$(jq -r .state <<<"$pr")" != "OPEN" ]; then
+            stale="PR がもう開いていない"
+          elif [ "$(jq -r .headRefOid <<<"$pr")" != "$FAILED" ]; then
+            stale="枝が進んだので、新しいコミットの CI に任せる"
+          elif jq -e '[.labels[].name] | index("人の手が要る")' <<<"$pr" >/dev/null; then
+            stale="すでに人に渡している"
+          fi
+          if [ -n "${stale:-}" ]; then
+            echo "直しにいかない:$stale"
+            echo "stale=$stale" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.gate.outputs.stale == ''
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Node を用意する
-        if: hashFiles('.node-version', 'package.json') != ''
+        if: steps.gate.outputs.stale == '' && hashFiles('.node-version', 'package.json') != ''
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: ${{ hashFiles('.node-version') != '' && '.node-version' || 'package.json' }}
@@ -144,7 +171,7 @@ jobs:
       # packageManager itself, and refuses a version given beside it.
       - name: pnpm の版の決め方を調べる
         id: pnpm
-        if: hashFiles('**/pnpm-lock.yaml') != ''
+        if: steps.gate.outputs.stale == '' && hashFiles('**/pnpm-lock.yaml') != ''
         run: |
           if jq -e '.packageManager // "" | startswith("pnpm@")' package.json >/dev/null 2>&1; then
             echo "pinned=true" >> "$GITHUB_OUTPUT"
@@ -162,6 +189,7 @@ jobs:
 
       # A bare `git push` then goes to the PR's branch and nowhere else.
       - name: PR の枝を用意する
+        if: steps.gate.outputs.stale == ''
         env:
           BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
@@ -172,6 +200,7 @@ jobs:
 
       - name: Claude Code で直す
         id: claude
+        if: steps.gate.outputs.stale == ''
         uses: anthropics/claude-code-action@acfe7992852970efb4fee683d63d628e3e52df67 # v1.0.286
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -194,7 +223,7 @@ jobs:
                - 手元で直ったことを確かめられない。
             5. 直したら、`git add` で直したファイルだけを入れ、次の形でコミットして、`git push` で push する(引数は付けない。上流はこの PR の枝にしてある)。`.github/workflows` と `node_modules` は入れない。
                ```
-               git commit -m "CI の失敗を直す" -m "<原因と、したことを1〜3行で>" -m "失敗した実行：${{ github.event.workflow_run.html_url }}" -m "Claude-CI-Fix: ${{ needs.triage.outputs.attempt }}"
+               git commit -m "CI の失敗を直す" -m "<原因と、したことを1〜3行で>" -m "失敗した実行：${{ github.event.workflow_run.html_url }}" -m "Claude-CI-Fix: ${{ needs.triage.outputs.attempt }}" -m "Claude-CI-Run: ${{ github.run_id }}"
                ```
                push が断られたら(あいだにだれかが push した、など)、やり直さずに `needs_human` で返す(枝が進んでいれば、新しい CI がもう一度判断する)。
             6. 結果を構造化した出力で返す。`summary` には、原因と、したこと(または人にしてほしいこと)を日本語で短く書く。PR を読む人がそれだけで次に動けるように。
@@ -210,7 +239,8 @@ jobs:
             --disallowedTools "Bash(git push --force:*),Bash(git push -f:*),Bash(git push origin:*),Bash(gh pr edit:*),Bash(gh pr merge:*),Bash(gh pr comment:*)"
 
       # Whether Claude's commit reached the PR's branch: the branch moved past the failed commit
-      # to a commit carrying this attempt's trailer.
+      # to a commit carrying this attempt's and this run's trailers. The run id tells this run's
+      # commit from one an earlier run for the same commit pushed.
       - name: push できたか確かめる
         id: push
         if: always() && steps.claude.outcome != 'skipped'
@@ -220,10 +250,12 @@ jobs:
           BRANCH: ${{ github.event.workflow_run.head_branch }}
           FAILED: ${{ github.event.workflow_run.head_sha }}
           ATTEMPT: ${{ needs.triage.outputs.attempt }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           head=$(gh api "repos/$GH_REPO/branches/$BRANCH" --jq .commit.sha)
           message=$(gh api "repos/$GH_REPO/commits/$head" --jq .commit.message)
-          if [ "$head" != "$FAILED" ] && grep -qx "Claude-CI-Fix: $ATTEMPT" <<<"$message"; then
+          if [ "$head" != "$FAILED" ] && grep -qx "Claude-CI-Fix: $ATTEMPT" <<<"$message" &&
+            grep -qx "Claude-CI-Run: $RUN_ID" <<<"$message"; then
             echo "pushed=true" >> "$GITHUB_OUTPUT"
           else
             echo "pushed=false" >> "$GITHUB_OUTPUT"
@@ -233,7 +265,7 @@ jobs:
   report:
     needs: [triage, fix]
     if: >-
-      !cancelled() && needs.triage.outputs.pr != '' &&
+      !cancelled() && needs.triage.outputs.pr != '' && needs.fix.outputs.stale == '' &&
       (needs.fix.result != 'skipped' || needs.triage.outputs.reason != '')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
