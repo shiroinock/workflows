@@ -1,0 +1,24 @@
+# Checks the shared workflows, templates and Renovate preset before they reach every repository:
+# actionlint (with shellcheck), zizmor, pinact, renovate-config-validator. The tools and their
+# versions come from flake.nix and flake.lock; `nix flake check` runs the same here and locally.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read # check out the repository
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+      - run: nix flake check --print-build-logs
