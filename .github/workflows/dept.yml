@@ -1,0 +1,51 @@
+# Reusable: scores how far the dependencies lag behind their latest releases with dept
+# (https://github.com/shiroinock/dept) and puts a badge and a report for the README on a branch.
+# The badge SVG is drawn by dept itself; no badge service or third-party API is used.
+# dept comes from its release after its build provenance is verified. Call it from templates/dept.yml.
+name: dept
+
+on:
+  workflow_call:
+    inputs:
+      path:
+        description: ロックファイルか、それを含むディレクトリ
+        type: string
+        default: "."
+      args:
+        description: dept に渡す追加の引数(`--prod --badge-colors 50,200` など)
+        type: string
+        default: ""
+      allow_errors:
+        description: >-
+          調べられなかった依存(レジストリのエラーなど)があってもバッジを置くか。
+          既定では、低すぎるスコアで前のバッジを上書きしないよう、置かずに失敗にする。
+        type: boolean
+        default: false
+      branch:
+        description: バッジ(dept.svg)、レポート(dept.md)、結果(dept.json)を置くブランチ。空にすると push しない
+        type: string
+        default: dept-badge
+
+permissions: {}
+
+jobs:
+  dept:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # push the badge branch
+    # Two runs close together must not let the older result land last on the same branch.
+    concurrency:
+      group: dept-${{ github.repository }}-${{ inputs.branch }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: dept
+        uses: shiroinock/dept@814765f8b72a32a80586659fdfd1727581186ebe # v0.3.0
+        with:
+          path: ${{ inputs.path }}
+          args: ${{ inputs.args }}
+          allow-errors: ${{ inputs.allow_errors }}
+          branch: ${{ inputs.branch }}
