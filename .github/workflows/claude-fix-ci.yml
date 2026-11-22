@@ -28,7 +28,7 @@ on:
       skip_workflows:
         description: >-
           直しにいかないワークフローのファイル名(空白区切り。例 "e2e.yml deploy-preview.yml")。
-          Claude のレビュー(claude-code-review.yml)と、アクションの固定(pinact.yml)は、これに書かなくても飛ばす。
+          Claude のレビュー(claude-code-review.yml)、アクションの固定(pinact.yml)、共通の静的ルール(static-rules.yml)は、これに書かなくても飛ばす。
         type: string
         default: ''
     secrets:
@@ -67,11 +67,14 @@ jobs:
           WORKFLOW_PATH: ${{ github.event.workflow_run.path }}
           SKIP: ${{ inputs.skip_workflows }}
         run: |
-          # The review fails on purpose while findings remain, and pinact can only be fixed in
-          # .github/workflows, which Claude does not touch here: neither is a CI to fix.
+          # The review fails on purpose while findings remain; pinact can only be fixed in
+          # .github/workflows, which Claude does not touch here; the shared static rules need nix,
+          # which this job lacks, so Claude could not check its fix and would hand the PR to a
+          # person (and the label would stop the fixes for the CI too). The pre-push hook and
+          # `nix run github:shiroinock/workflows#rules -- --fix` fix those locally.
           workflow=${WORKFLOW_PATH%%@*}
           workflow=${workflow##*/}
-          for skip in claude-code-review.yml pinact.yml $SKIP; do
+          for skip in claude-code-review.yml pinact.yml static-rules.yml $SKIP; do
             if [ "$workflow" = "$skip" ]; then
               echo "直しにいかない:$workflow は直す対象のワークフローではない"
               echo "try=false" >> "$GITHUB_OUTPUT"

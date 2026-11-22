@@ -7,7 +7,7 @@ on:
   # Runs from the default branch's copy of this file, with secrets; the job itself only takes
   # branches of this repository whose PR a person opened.
   # Every workflow: the job takes only the failed runs a PR started, whatever the CI is named,
-  # and skips the shared ones that are not code checks (see skip_workflows below).
+  # and skips the shared ones it does not fix (see skip_workflows below).
   workflow_run:
     workflows: ["**"]
     types: [completed]
