@@ -3,8 +3,7 @@
 # the PR points at the default branch. Claude only reads and comments; the label is added by a later
 # job that reads Claude's structured verdict, so the Claude job never holds a token that can label
 # or merge. The verdict job fails while findings remain; make "review / verdict" a required check
-# so such a PR cannot be merged. Minor findings worth fixing later never block; the nits job
-# collects them in one issue labelled あとで直す. Call it from templates/claude-code-review.yml.
+# so such a PR cannot be merged. Call it from templates/claude-code-review.yml.
 name: Claude のレビュー
 
 on:
@@ -24,12 +23,6 @@ on:
           空にすると、ボットの PR や push はレビューしない。
         type: string
         default: renovate,claude
-      collect_nits:
-        description: >-
-          直さなくてもマージできるが直す価値のある小さい指摘を、ラベル「あとで直す」の issue に PR ごとにまとめる。
-          マージは止めない。
-        type: boolean
-        default: true
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -153,7 +146,6 @@ jobs:
             4. 自分の指摘と skill の指摘を、1つずつコードに戻って確かめる。本物で、直す必要があるものだけを残す。好みの違いや、確かめられなかった推測は落とす。
             5. 残った指摘を PR にコメントで残す。行に結び付く指摘は `mcp__github_inline_comment__create_inline_comment` で行に付け、最後に `gh pr comment ${{ github.event.pull_request.number }} --body "…"` で全体のまとめを1つ書く。まとめには、見た観点、残した指摘の数、直す必要のある指摘がないならそのこと、を書く。
             6. 結果を構造化した出力で返す。直す必要のある指摘が1つでもあれば `verdict` は `changes_requested`、なければ `clean`。`findings` は直す必要のある指摘の数で、直さなくてもマージできる小さい指摘は数えない(`clean` なら必ず 0)。
-               直さなくてもマージできるが直す価値のある小さい指摘は `nits` に入れる(1件ごとに `path`・`line`・`summary`。`summary` は1〜2文)。好みの違いや、確かめられなかった推測は入れない。全体から見て、直すと部品やコードが単純になる・そろうものだけを入れる。まれな端の場合のために条件分岐や特別扱いを足すだけの直し、つまり局所的に考えることを増やすだけの直しは入れない。端の場合が気になるときは、それを生んでいる根の作りを直す形で書けるならそう書き、書けないなら落とす。`nits` はマージを止めず、あとで直す一覧に集められる。無ければ空の配列。
 
             ## 見る観点
             - 正しさ:ふるまいの誤り、壊れる入力、型、エラー処理、テストの抜け。
@@ -170,7 +162,7 @@ jobs:
           claude_args: >-
             --model ${{ inputs.model }}
             --permission-mode default
-            --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["clean","changes_requested"]},"findings":{"type":"integer","minimum":0,"description":"直す必要のある指摘の数。直さなくてもマージできる小さい指摘は数えない"},"summary":{"type":"string"},"nits":{"type":"array","description":"直さなくてもマージできるが直す価値のある小さい指摘","items":{"type":"object","properties":{"path":{"type":"string"},"line":{"type":"integer","minimum":0},"summary":{"type":"string"}},"required":["path","summary"]}}},"required":["verdict","findings","summary","nits"]}'
+            --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["clean","changes_requested"]},"findings":{"type":"integer","minimum":0,"description":"直す必要のある指摘の数。直さなくてもマージできる小さい指摘は数えない"},"summary":{"type":"string"}},"required":["verdict","findings","summary"]}'
             --allowedTools "Read,Glob,Grep,Skill,Task,Agent,mcp__github_inline_comment__create_inline_comment,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
             --disallowedTools "Edit,Write,NotebookEdit,Bash(git push:*),Bash(git commit:*),Bash(gh pr edit:*),Bash(gh pr merge:*)"
 
@@ -262,78 +254,6 @@ jobs:
             echo "::error::Claude のレビューに直す指摘がある($FINDINGS 件)。PR のコメントを見て直し、push するともう一度レビューされる"
           fi
           exit 1
-
-  # Collects the minor findings worth fixing later in one issue (label あとで直す), one comment per
-  # PR, replaced by each new review of that PR. They never block the merge. Claude's text reaches
-  # the issue only as Markdown built by jq; nothing of it becomes code. Runs one at a time per
-  # repository, so two PRs cannot both create the issue.
-  nits:
-    needs: review
-    if: >-
-      !cancelled() && inputs.collect_nits && needs.review.result == 'success' &&
-      needs.review.outputs.result != ''
-    concurrency:
-      group: claude-review-nits-${{ github.repository }}
-      cancel-in-progress: false
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      issues: write # create the issue and the label, write the PR's comment
-    steps:
-      - name: 小さい指摘を issue「あとで直す」に書く
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          REVIEW: ${{ needs.review.outputs.result }}
-          PR: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          SHA: ${{ github.event.pull_request.head.sha }}
-          SERVER: ${{ github.server_url }}
-        run: |
-          count=$(jq '(.nits // []) | length' <<<"$REVIEW")
-          marker="<!-- claude-review-nits pr=$PR -->"
-          title="Claude のレビューで見つかった、あとで直す小さい指摘"
-
-          issue=$(gh issue list --state open --label あとで直す --limit 100 --json number,title |
-            jq -r --arg t "$title" '[.[] | select(.title == $t)][0].number // empty')
-          if [ -z "$issue" ]; then
-            if [ "$count" = 0 ]; then
-              echo "小さい指摘は無い"
-              exit 0
-            fi
-            gh label create あとで直す --color c5def5 \
-              --description "マージは止めないが、あとで直す価値のあるもの" 2>/dev/null || true
-            issue=$(gh issue create --label あとで直す --title "$title" --body "Claude のレビューが、直さなくてもマージできるが直す価値がある、とした指摘を PR ごとにまとめます。マージは止めません。
-
-          - PR ごとに1つのコメントで、その PR がレビューされ直すたびに最新のレビューの指摘に置き換わります。
-          - 直したら、そのコメントのチェックを入れるか、コメントを消してください。全部片付いたら、この issue を閉じます（次の指摘で新しく開きます）。
-          - 1つずつ直す前に、全体を見渡してください。似た指摘が複数の PR に出ていれば、根の作りを1か所で直します。端の場合のために特別扱いを足すだけの直しになるものは、直さずに消してかまいません。" | sed 's#.*/##')
-          fi
-
-          # @ is swapped so a summary cannot mention anyone.
-          body=$(jq -r --arg marker "$marker" --arg pr "$PR" --arg title "$PR_TITLE" \
-            --arg url "$SERVER/$GH_REPO/blob/$SHA" --arg sha "${SHA:0:7}" '
-            def clean: gsub("@"; "＠") | gsub("<!--"; "&lt;!--") | gsub("[\r\n]+"; " ");
-            [$marker,
-             "#\($pr) \($title | clean)（\($sha) のレビュー）",
-             ""] +
-            (if ((.nits // []) | length) == 0
-             then ["最新のレビューでは、小さい指摘はありません。"]
-             else [(.nits[] |
-               "- [ ] [`\(.path | clean)\(if (.line // 0) > 0 then ":\(.line)" else "" end)`](\($url)/\(.path | @uri | gsub("%2F"; "/"))\(if (.line // 0) > 0 then "#L\(.line)" else "" end)) \(.summary | clean)")]
-             end) | join("\n")' <<<"$REVIEW")
-
-          comment=$(gh api "repos/$GH_REPO/issues/$issue/comments" --paginate --jq '.[]' |
-            jq -r --arg m "$marker" 'select(.body | startswith($m)) | .id' | head -n 1)
-          if [ -n "$comment" ]; then
-            gh api -X PATCH "repos/$GH_REPO/issues/comments/$comment" -f body="$body" --silent
-            echo "issue #$issue の PR #$PR のコメントを置き換えた($count 件)"
-          elif [ "$count" != 0 ]; then
-            gh issue comment "$issue" --body "$body"
-            echo "issue #$issue に PR #$PR の小さい指摘を書いた($count 件)"
-          else
-            echo "小さい指摘は無い"
-          fi
 
   # Leaves one comment on a PR whose review could not run because it changes .github/workflows.
   explain:
