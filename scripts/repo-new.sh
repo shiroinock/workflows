@@ -18,7 +18,9 @@ fi
 
 echo "repo-new: $OWNER/$name に共通の設定を入れる"
 repo-baseline "$name"
+status=$?
 
 if [ -d "$name/.git" ] && [ -z "$(git -C "$name" rev-parse --verify -q HEAD)" ]; then
   echo "repo-new: 手元の clone($name)はまだ空なので、共通の設定のコミットを取り込む:git -C $name pull origin $(gh repo view "$OWNER/$name" --json defaultBranchRef --jq .defaultBranchRef.name)"
 fi
+exit "$status"

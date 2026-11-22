@@ -195,7 +195,12 @@ workflows_step() { # <full> <private> <default branch> <empty>
   fi
 
   local pr
-  pr=$(gh pr list -R "$full" --head "$BRANCH" --state open --json number --jq '.[0].number // empty' 2>/dev/null)
+  # An error here must not read as "no PR": the branch is deleted below, which would close an
+  # open PR, and declined() would then take its files as declined for good.
+  if ! pr=$(gh pr list -R "$full" --head "$BRANCH" --state open --json number --jq '.[0].number // empty' 2>/dev/null); then
+    fail "   共通のワークフロー: 開いた PR を確かめられなかったので飛ばす"
+    return
+  fi
   if [ -n "$pr" ]; then
     echo "   共通のワークフロー: 足りない($names)。入れる PR #$pr がもうある"
     return
