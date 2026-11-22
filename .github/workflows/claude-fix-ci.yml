@@ -222,7 +222,7 @@ jobs:
 
             ## 手順
             1. リポジトリの `AGENTS.md`・`CLAUDE.md`・`CONTRIBUTING.md` を読み、決まりと確かめ方を知る(無いものは飛ばす)。
-            2. `gh run view ${{ github.event.workflow_run.id }} --log-failed` で、落ちたところを読む。同じコミットでほかのワークフローも落ちていることがあるので、`gh pr checks ${{ needs.triage.outputs.pr }}` で落ちた検査を見て、Claude のレビュー・アクションの固定・共通の静的ルール以外の落ちた実行も `gh run view <id> --log-failed` で読み、まとめて直す(1回の push で済ませる)。`gh pr view ${{ needs.triage.outputs.pr }}` と `gh pr diff ${{ needs.triage.outputs.pr }}` で、PR が何をしようとしているかを読む。
+            2. `gh run view ${{ github.event.workflow_run.id }} --log-failed` で、落ちたところを読む。同じコミットでほかのワークフローも落ちていることがあるので、`gh pr checks ${{ needs.triage.outputs.pr }}` で落ちた検査を見て、Claude のレビュー(`claude-code-review.yml`)・アクションの固定(`pinact.yml`)・共通の静的ルール(`static-rules.yml`)と、このリポジトリが外したワークフロー(`${{ inputs.skip_workflows }}`。空なら無し)以外の落ちた実行も `gh run view <id> --log-failed` で読み、まとめて直す(1回の push で済ませる)。`gh pr view ${{ needs.triage.outputs.pr }}` と `gh pr diff ${{ needs.triage.outputs.pr }}` で、PR が何をしようとしているかを読む。
             3. 原因を決める。PR の変更が原因で、PR の目的を変えずに直せるなら直す。必要なら依存を入れ(ロックファイルに合わせて `npm ci` か `pnpm install --frozen-lockfile`)、落ちた検査を手元で流して、通ることを確かめる。
             4. 次のときは直さず、`needs_human` で返す。
                - 直し方が PR の目的や設計の判断にかかわる。
@@ -299,6 +299,12 @@ jobs:
     if: >-
       !cancelled() && needs.triage.outputs.pr != '' && needs.fix.outputs.stale == '' &&
       (needs.fix.result != 'skipped' || needs.triage.outputs.reason != '')
+    # One report per PR at a time, so that the label check below sees what an earlier one did
+    # (several workflows failing on the same commit each come here, e.g. once the fixes ran out).
+    # A group of its own: sharing fix's would let a waiting report replace a waiting fix.
+    concurrency:
+      group: claude-fix-ci-report-${{ needs.triage.outputs.pr }}
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -338,6 +344,12 @@ jobs:
             "下書きの PR は、作っている人に任せる"|"ボットの PR では、枝のコマンドを Claude のトークンのそばで動かさない"|"すでに人に渡している")
               echo "知らせない:$REASON"; exit 0 ;;
           esac
+          # Another report may have handed the PR over since triage looked. The label this run's
+          # fix put on is this run's to announce.
+          if [ "$LABELED" != "true" ] &&
+            gh pr view "$PR" --json labels --jq '[.labels[].name] | index("人の手が要る")' | grep -qv '^null$'; then
+            echo "知らせない:もう人に渡してある"; exit 0
+          fi
           if [ -n "$REASON" ]; then
             why="$REASON。"
           elif [ "$result" = "needs_human" ]; then
