@@ -18,10 +18,11 @@ on:
         default: opus
       allowed_bots:
         description: >-
-          PR を作ってもレビューするボット(カンマ区切り、`[bot]` は付けなくてよい)。共通の標準で依存の更新の
-          PR を出す Renovate を既定で入れる。空にすると、ボットの PR はレビューしない。
+          PR を作ったり push したりしてもレビューするボット(カンマ区切り、`[bot]` は付けなくてよい)。
+          依存の更新の PR を出す Renovate と、claude-fix-ci.yml で CI の直しを push する Claude を既定で入れる。
+          空にすると、ボットの PR や push はレビューしない。
         type: string
-        default: renovate
+        default: renovate,claude
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
