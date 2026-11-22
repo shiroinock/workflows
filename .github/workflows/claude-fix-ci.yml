@@ -8,7 +8,7 @@
 # not). The action revokes that token when it ends, so no later step can push with it. Claude may
 # run only a bare `git push`, to the PR's branch set up beforehand; force-pushing is not allowed.
 #
-# Security: the job runs the branch's own commands (npm ci, the tests) with the Claude token in
+# Security: the job runs the branch's own commands (npm ci or pnpm install, the tests) with the Claude token in
 # reach. It therefore only runs for branches of this repository whose PR was opened by a person,
 # not by a bot: a dependency update could otherwise run a new package's install scripts here.
 name: Claude で CI を直す
@@ -118,6 +118,19 @@ jobs:
         with:
           node-version-file: ${{ hashFiles('.node-version') != '' && '.node-version' || 'package.json' }}
 
+      # pnpm, for repositories that lock with it: the version pinned in packageManager, else pnpm 10.
+      - name: pnpm を用意する
+        if: hashFiles('pnpm-lock.yaml') != ''
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+        run: |
+          if jq -e '.packageManager // "" | startswith("pnpm@")' package.json >/dev/null 2>&1; then
+            corepack enable
+          else
+            npm install -g pnpm@10
+          fi
+          pnpm --version
+
       # A bare `git push` then goes to the PR's branch and nowhere else.
       - name: PR の枝を用意する
         env:
@@ -144,7 +157,7 @@ jobs:
             ## 手順
             1. リポジトリの `AGENTS.md`・`CLAUDE.md`・`CONTRIBUTING.md` を読み、決まりと確かめ方を知る(無いものは飛ばす)。
             2. `gh run view ${{ github.event.workflow_run.id }} --log-failed` で、落ちたところを読む。`gh pr view ${{ needs.triage.outputs.pr }}` と `gh pr diff ${{ needs.triage.outputs.pr }}` で、PR が何をしようとしているかを読む。
-            3. 原因を決める。PR の変更が原因で、PR の目的を変えずに直せるなら直す。必要なら依存を入れ(`npm ci` など)、落ちた検査を手元で流して、通ることを確かめる。
+            3. 原因を決める。PR の変更が原因で、PR の目的を変えずに直せるなら直す。必要なら依存を入れ(ロックファイルに合わせて `npm ci` か `pnpm install --frozen-lockfile`)、落ちた検査を手元で流して、通ることを確かめる。
             4. 次のときは直さず、`needs_human` で返す。
                - 直し方が PR の目的や設計の判断にかかわる。
                - シークレット、外のサービス、権限、ランナーの不調、たまにしか落ちないテストなど、コードの外に原因がある。
@@ -164,7 +177,7 @@ jobs:
             --model ${{ inputs.model }}
             --permission-mode default
             --json-schema '{"type":"object","properties":{"result":{"type":"string","enum":["fixed","needs_human"]},"summary":{"type":"string"}},"required":["result","summary"]}'
-            --allowedTools "Read,Glob,Grep,Edit,Write,Task,Agent,Bash(gh run view:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git add:*),Bash(git commit:*),Bash(git push),Bash(npm ci:*),Bash(npm install:*),Bash(npm run:*),Bash(npm test:*),Bash(npx:*),Bash(node:*)"
+            --allowedTools "Read,Glob,Grep,Edit,Write,Task,Agent,Bash(gh run view:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git add:*),Bash(git commit:*),Bash(git push),Bash(npm ci:*),Bash(npm install:*),Bash(npm run:*),Bash(npm test:*),Bash(npx:*),Bash(node:*),Bash(pnpm install:*),Bash(pnpm run:*),Bash(pnpm test:*),Bash(pnpm exec:*),Bash(pnpm --filter:*),Bash(pnpm -r:*)"
             --disallowedTools "Bash(git push --force:*),Bash(git push -f:*),Bash(git push origin:*),Bash(gh pr edit:*),Bash(gh pr merge:*),Bash(gh pr comment:*)"
 
       # Whether Claude's commit reached the PR's branch: the branch moved past the failed commit
