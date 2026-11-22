@@ -1,7 +1,9 @@
 # Reusable: when the CI of a PR fails, Claude Code reads the failure, fixes the branch and pushes.
 # When the failure needs a person (a decision, a secret, a flaky runner), or the fixes run out,
 # it says so on the PR, mentions the owner and labels it 人の手が要る. Call it from
-# templates/claude-fix-ci.yml, triggered by workflow_run of the CI.
+# templates/claude-fix-ci.yml, triggered by workflow_run of every workflow ("**"): whatever the
+# repository names its CI, a failed run that a PR started is taken here. Runs from other events
+# (deploys on push, schedules) and the shared workflows that are not code checks are skipped.
 #
 # Claude commits and pushes inside the action, where git is set up with the Claude GitHub App's
 # token, so that the push starts the CI and the review again (a push with GITHUB_TOKEN would
@@ -23,6 +25,12 @@ on:
       model:
         type: string
         default: opus
+      skip_workflows:
+        description: >-
+          直しにいかないワークフローのファイル名(空白区切り。例 "e2e.yml deploy-preview.yml")。
+          Claude のレビュー(claude-code-review.yml)、アクションの固定(pinact.yml)、共通の静的ルール(static-rules.yml)は、これに書かなくても飛ばす。
+        type: string
+        default: ''
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -56,7 +64,23 @@ jobs:
           BRANCH: ${{ github.event.workflow_run.head_branch }}
           SHA: ${{ github.event.workflow_run.head_sha }}
           MAX: ${{ inputs.max_attempts }}
+          WORKFLOW_PATH: ${{ github.event.workflow_run.path }}
+          SKIP: ${{ inputs.skip_workflows }}
         run: |
+          # The review fails on purpose while findings remain; pinact can only be fixed in
+          # .github/workflows, which Claude does not touch here; the shared static rules need nix,
+          # which this job lacks, so Claude could not check its fix and would hand the PR to a
+          # person (and the label would stop the fixes for the CI too). The pre-push hook and
+          # `nix run github:shiroinock/workflows#rules -- --fix` fix those locally.
+          workflow=${WORKFLOW_PATH%%@*}
+          workflow=${workflow##*/}
+          for skip in claude-code-review.yml pinact.yml static-rules.yml $SKIP; do
+            if [ "$workflow" = "$skip" ]; then
+              echo "直しにいかない:$workflow は直す対象のワークフローではない"
+              echo "try=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
           pr=$(gh pr list --head "$BRANCH" --state open --json number,headRefOid,isDraft,author,labels \
             --jq "map(select(.headRefOid == \"$SHA\")) | first // empty")
           if [ -z "$pr" ]; then
@@ -91,7 +115,9 @@ jobs:
   fix:
     needs: triage
     if: needs.triage.outputs.try == 'true'
-    # One fix per PR at a time; a newer failure waits for the one in progress.
+    # One fix per PR at a time. Only one waits behind the running one: a newer failure replaces
+    # (cancels) the waiting fix, which is fine, since the newest one reads every failed check of
+    # the commit anyway, and a cancelled fix says nothing.
     concurrency:
       group: claude-fix-ci-${{ needs.triage.outputs.pr }}
       cancel-in-progress: false
@@ -99,21 +125,49 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
-      pull-requests: read
+      # comment on the PR and label it 人の手が要る in the last step, while this job still holds
+      # the concurrency group (the Claude GitHub App's token in reach here can do more already)
+      pull-requests: write
+      issues: write # create the label
       actions: read # read the failed run's logs
       id-token: write # the action exchanges it for the Claude GitHub App's token
-    outputs:
-      result: ${{ steps.claude.outputs.structured_output }}
-      pushed: ${{ steps.push.outputs.pushed }}
     steps:
+      # Several workflows can fail on the same commit, and each sends its own workflow_run. The
+      # concurrency above lets one of them wait behind the running fix, so check again once this
+      # one holds it:
+      # the branch may have moved (Claude's fix from the earlier one), or the PR may have been
+      # handed to a person (the earlier fix labels it before releasing the group). Then there is
+      # nothing left to do here.
+      - name: まだ直しにいくかを確かめ直す
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ needs.triage.outputs.pr }}
+          FAILED: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          pr=$(gh pr view "$PR" --json state,headRefOid,labels)
+          if [ "$(jq -r .state <<<"$pr")" != "OPEN" ]; then
+            stale="PR がもう開いていない"
+          elif [ "$(jq -r .headRefOid <<<"$pr")" != "$FAILED" ]; then
+            stale="枝が進んだので、新しいコミットの CI に任せる"
+          elif jq -e '[.labels[].name] | index("人の手が要る")' <<<"$pr" >/dev/null; then
+            stale="すでに人に渡している"
+          fi
+          if [ -n "${stale:-}" ]; then
+            echo "直しにいかない:$stale"
+            echo "stale=$stale" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.gate.outputs.stale == ''
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Node を用意する
-        if: hashFiles('.node-version', 'package.json') != ''
+        if: steps.gate.outputs.stale == '' && hashFiles('.node-version', 'package.json') != ''
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: ${{ hashFiles('.node-version') != '' && '.node-version' || 'package.json' }}
@@ -123,7 +177,7 @@ jobs:
       # packageManager itself, and refuses a version given beside it.
       - name: pnpm の版の決め方を調べる
         id: pnpm
-        if: hashFiles('**/pnpm-lock.yaml') != ''
+        if: steps.gate.outputs.stale == '' && hashFiles('**/pnpm-lock.yaml') != ''
         run: |
           if jq -e '.packageManager // "" | startswith("pnpm@")' package.json >/dev/null 2>&1; then
             echo "pinned=true" >> "$GITHUB_OUTPUT"
@@ -141,6 +195,7 @@ jobs:
 
       # A bare `git push` then goes to the PR's branch and nowhere else.
       - name: PR の枝を用意する
+        if: steps.gate.outputs.stale == ''
         env:
           BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
@@ -151,6 +206,10 @@ jobs:
 
       - name: Claude Code で直す
         id: claude
+        if: steps.gate.outputs.stale == ''
+        # Shorter than the job's: a job that times out is cancelled and its last step would not
+        # tell anyone; a step that times out only fails, and the last step says so.
+        timeout-minutes: 35
         uses: anthropics/claude-code-action@acfe7992852970efb4fee683d63d628e3e52df67 # v1.0.286
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -164,7 +223,7 @@ jobs:
 
             ## 手順
             1. リポジトリの `AGENTS.md`・`CLAUDE.md`・`CONTRIBUTING.md` を読み、決まりと確かめ方を知る(無いものは飛ばす)。
-            2. `gh run view ${{ github.event.workflow_run.id }} --log-failed` で、落ちたところを読む。`gh pr view ${{ needs.triage.outputs.pr }}` と `gh pr diff ${{ needs.triage.outputs.pr }}` で、PR が何をしようとしているかを読む。
+            2. `gh run view ${{ github.event.workflow_run.id }} --log-failed` で、落ちたところを読む。同じコミットでほかのワークフローも落ちていることがあるので、`gh pr checks ${{ needs.triage.outputs.pr }}` で落ちた検査を見て、Claude のレビュー(`claude-code-review.yml`)・アクションの固定(`pinact.yml`)・共通の静的ルール(`static-rules.yml`)と、このリポジトリが外したワークフロー(`${{ inputs.skip_workflows }}`。空なら無し)以外の落ちた実行も `gh run view <id> --log-failed` で読み、まとめて直す(1回の push で済ませる)。`gh pr view ${{ needs.triage.outputs.pr }}` と `gh pr diff ${{ needs.triage.outputs.pr }}` で、PR が何をしようとしているかを読む。
             3. 原因を決める。PR の変更が原因で、PR の目的を変えずに直せるなら直す。必要なら依存を入れ(ロックファイルに合わせて `npm ci` か `pnpm install --frozen-lockfile`)、落ちた検査を手元で流して、通ることを確かめる。
             4. 次のときは直さず、`needs_human` で返す。
                - 直し方が PR の目的や設計の判断にかかわる。
@@ -173,7 +232,7 @@ jobs:
                - 手元で直ったことを確かめられない。
             5. 直したら、`git add` で直したファイルだけを入れ、次の形でコミットして、`git push` で push する(引数は付けない。上流はこの PR の枝にしてある)。`.github/workflows` と `node_modules` は入れない。
                ```
-               git commit -m "CI の失敗を直す" -m "<原因と、したことを1〜3行で>" -m "失敗した実行：${{ github.event.workflow_run.html_url }}" -m "Claude-CI-Fix: ${{ needs.triage.outputs.attempt }}"
+               git commit -m "CI の失敗を直す" -m "<原因と、したことを1〜3行で>" -m "失敗した実行：${{ github.event.workflow_run.html_url }}" -m "Claude-CI-Fix: ${{ needs.triage.outputs.attempt }}" -m "Claude-CI-Run: ${{ github.run_id }}"
                ```
                push が断られたら(あいだにだれかが push した、など)、やり直さずに `needs_human` で返す(枝が進んでいれば、新しい CI がもう一度判断する)。
             6. 結果を構造化した出力で返す。`summary` には、原因と、したこと(または人にしてほしいこと)を日本語で短く書く。PR を読む人がそれだけで次に動けるように。
@@ -185,11 +244,12 @@ jobs:
             --model ${{ inputs.model }}
             --permission-mode default
             --json-schema '{"type":"object","properties":{"result":{"type":"string","enum":["fixed","needs_human"]},"summary":{"type":"string"}},"required":["result","summary"]}'
-            --allowedTools "Read,Glob,Grep,Edit,Write,Task,Agent,Bash(gh run view:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git add:*),Bash(git commit:*),Bash(git push),Bash(npm ci:*),Bash(npm install:*),Bash(npm run:*),Bash(npm test:*),Bash(npx:*),Bash(node:*),Bash(pnpm install:*),Bash(pnpm run:*),Bash(pnpm test:*),Bash(pnpm exec:*),Bash(pnpm --filter:*),Bash(pnpm -r:*)"
+            --allowedTools "Read,Glob,Grep,Edit,Write,Task,Agent,Bash(gh run view:*),Bash(gh pr checks:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git add:*),Bash(git commit:*),Bash(git push),Bash(npm ci:*),Bash(npm install:*),Bash(npm run:*),Bash(npm test:*),Bash(npx:*),Bash(node:*),Bash(pnpm install:*),Bash(pnpm run:*),Bash(pnpm test:*),Bash(pnpm exec:*),Bash(pnpm --filter:*),Bash(pnpm -r:*)"
             --disallowedTools "Bash(git push --force:*),Bash(git push -f:*),Bash(git push origin:*),Bash(gh pr edit:*),Bash(gh pr merge:*),Bash(gh pr comment:*)"
 
       # Whether Claude's commit reached the PR's branch: the branch moved past the failed commit
-      # to a commit carrying this attempt's trailer.
+      # to a commit carrying this attempt's and this run's trailers. The run id tells this run's
+      # commit from one an earlier run for the same commit pushed.
       - name: push できたか確かめる
         id: push
         if: always() && steps.claude.outcome != 'skipped'
@@ -199,28 +259,23 @@ jobs:
           BRANCH: ${{ github.event.workflow_run.head_branch }}
           FAILED: ${{ github.event.workflow_run.head_sha }}
           ATTEMPT: ${{ needs.triage.outputs.attempt }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           head=$(gh api "repos/$GH_REPO/branches/$BRANCH" --jq .commit.sha)
           message=$(gh api "repos/$GH_REPO/commits/$head" --jq .commit.message)
-          if [ "$head" != "$FAILED" ] && grep -qx "Claude-CI-Fix: $ATTEMPT" <<<"$message"; then
+          if [ "$head" != "$FAILED" ] && grep -qx "Claude-CI-Fix: $ATTEMPT" <<<"$message" &&
+            grep -qx "Claude-CI-Run: $RUN_ID" <<<"$message"; then
             echo "pushed=true" >> "$GITHUB_OUTPUT"
           else
             echo "pushed=false" >> "$GITHUB_OUTPUT"
           fi
 
-  # Says what happened on the PR. Hands it to a person when Claude could not fix it.
-  report:
-    needs: [triage, fix]
-    if: >-
-      !cancelled() && needs.triage.outputs.pr != '' &&
-      (needs.fix.result != 'skipped' || needs.triage.outputs.reason != '')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      pull-requests: write # comment and label
-      issues: write
-    steps:
+      # Says on the PR what happened, and hands it to a person when Claude could not fix it. All
+      # in this job, while it holds the concurrency group: the next fix waiting for the group
+      # starts as soon as this job ends, and its check must already see the label. Not on a
+      # cancelled run (nothing ran to report). If the branch moved meanwhile, the newer CI decides.
       - name: PR に知らせる
+        if: ${{ !cancelled() && steps.gate.outputs.stale == '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -228,10 +283,9 @@ jobs:
           OWNER: ${{ github.repository_owner }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
           FAILED: ${{ github.event.workflow_run.head_sha }}
-          FIX_RESULT: ${{ needs.fix.result }}
-          PUSHED: ${{ needs.fix.outputs.pushed }}
-          RESULT: ${{ needs.fix.outputs.result }}
-          REASON: ${{ needs.triage.outputs.reason }}
+          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+          PUSHED: ${{ steps.push.outputs.pushed }}
+          RESULT: ${{ steps.claude.outputs.structured_output }}
         run: |
           summary=$(printf '%s' "$RESULT" | jq -r '.summary // ""' 2>/dev/null || true)
           result=$(printf '%s' "$RESULT" | jq -r '.result // ""' 2>/dev/null || true)
@@ -241,18 +295,12 @@ jobs:
           fi
           # Someone pushed while Claude was fixing: that push starts a newer CI, which decides
           # again. Handing the PR to a person here would stop Claude from fixing the new commit.
-          if [ -z "$REASON" ] && [ "$(gh pr view "$PR" --json headRefOid --jq .headRefOid)" != "$FAILED" ]; then
+          if [ "$(gh pr view "$PR" --json headRefOid --jq .headRefOid)" != "$FAILED" ]; then
             echo "知らせない:直しているあいだに枝が進んだので、新しい CI に任せる"; exit 0
           fi
-          case "$REASON" in
-            "下書きの PR は、作っている人に任せる"|"ボットの PR では、枝のコマンドを Claude のトークンのそばで動かさない"|"すでに人に渡している")
-              echo "知らせない:$REASON"; exit 0 ;;
-          esac
-          if [ -n "$REASON" ]; then
-            why="$REASON。"
-          elif [ "$result" = "needs_human" ]; then
+          if [ "$result" = "needs_human" ]; then
             why="Claude は、人が直す必要があると判断しました。"
-          elif [ "$FIX_RESULT" != "success" ]; then
+          elif [ "$CLAUDE_OUTCOME" != "success" ]; then
             why="直しのジョブが途中で失敗しました（実行のログを見てください）。"
           else
             why="直したと返しましたが、PR の枝に Claude のコミットが届いていません（push が断られた、あいだに push があった、など）。"
@@ -261,3 +309,41 @@ jobs:
             --description "CI の失敗を Claude が直せなかった。人が見る" 2>/dev/null || true
           gh pr edit "$PR" --add-label 人の手が要る
           gh pr comment "$PR" --body "$(printf '@%s CI の失敗（%s）を Claude では直せませんでした。%s\n\n%s\n\n直して push したら、ラベル「人の手が要る」を外してください（付いているあいだは Claude は直しにいきません）。' "$OWNER" "$RUN_URL" "$why" "$summary")"
+
+  # When triage decided not to try because the fixes ran out, hands the PR to a person. (fix says
+  # what happened itself when it ran.)
+  handoff:
+    needs: triage
+    if: needs.triage.outputs.try == 'false' && needs.triage.outputs.reason != ''
+    # One at a time per PR, so that the label check below sees what an earlier one did: several
+    # workflows failing on the same commit each come here once the fixes ran out. If a waiting
+    # one is replaced by a newer one, the newer one saw no label at triage either, and hands over.
+    concurrency:
+      group: claude-fix-ci-handoff-${{ needs.triage.outputs.pr }}
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write # comment and label
+      issues: write
+    steps:
+      - name: PR を人に渡す
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ needs.triage.outputs.pr }}
+          OWNER: ${{ github.repository_owner }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          REASON: ${{ needs.triage.outputs.reason }}
+        run: |
+          case "$REASON" in
+            "下書きの PR は、作っている人に任せる"|"ボットの PR では、枝のコマンドを Claude のトークンのそばで動かさない"|"すでに人に渡している")
+              echo "知らせない:$REASON"; exit 0 ;;
+          esac
+          if gh pr view "$PR" --json labels --jq '[.labels[].name] | index("人の手が要る")' | grep -qv '^null$'; then
+            echo "知らせない:もう人に渡してある"; exit 0
+          fi
+          gh label create 人の手が要る --color d93f0b \
+            --description "CI の失敗を Claude が直せなかった。人が見る" 2>/dev/null || true
+          gh pr edit "$PR" --add-label 人の手が要る
+          gh pr comment "$PR" --body "$(printf '@%s CI の失敗（%s）を Claude では直せませんでした。%s。\n\n直して push したら、ラベル「人の手が要る」を外してください（付いているあいだは Claude は直しにいきません）。' "$OWNER" "$RUN_URL" "$REASON")"
