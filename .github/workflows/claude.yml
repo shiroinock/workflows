@@ -55,3 +55,6 @@ jobs:
           include_comments_by_actor: ${{ github.repository_owner }},claude[bot]
           additional_permissions: |
             actions: read
+          # Replies follow the owner, who writes in Japanese; code, identifiers and commands stay as they are.
+          claude_args: >-
+            --append-system-prompt "issue・PR へのコメントと PR の本文は日本語で書く。コード・識別子・コマンド・エラーメッセージは元のまま書く。"
