@@ -1,0 +1,39 @@
+# Reusable: fails a PR when code matches one of the shared ast-grep rules in static-rules/. The
+# rules come from Claude's review findings that a static check catches cheaper and sooner (see
+# static-rules/README.md and rule-harvest.yml). Nothing is pushed: fix it locally with
+# `nix run github:shiroinock/workflows#rules -- --fix`. Call it from templates/static-rules.yml.
+#
+# ast-grep and the rules come from this repository's flake at workflows_ref.
+name: 共通の静的ルール
+
+on:
+  workflow_call:
+    inputs:
+      workflows_ref:
+        description: >-
+          ルールと ast-grep を取ってくる shiroinock/workflows の版。この workflow を SHA で呼ぶときは、
+          同じ SHA を渡す。
+        type: string
+        default: main
+
+permissions: {}
+
+jobs:
+  rules:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read # check out the repository
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+      - name: 共通の静的ルールで確かめる
+        env:
+          REF: ${{ inputs.workflows_ref }}
+        run: |
+          if ! nix run "github:shiroinock/workflows/$REF#rules" -- --format github; then
+            echo "::error::共通の静的ルールに引っかかるコードがあります。手元で \`nix run github:shiroinock/workflows#rules -- --fix\` を流すと、直せるものは直ります。外したいルールは .github/static-rules-off に書きます。"
+            exit 1
+          fi

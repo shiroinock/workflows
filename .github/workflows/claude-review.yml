@@ -163,6 +163,10 @@ jobs:
             - 本文の「触るファイル」があれば、実際に変えたファイルと合っているか。
             ${{ inputs.review_focus }}
 
+            ## 静的解析との分担
+            - リポジトリの CI で回している lint・型検査(`biome.json`・Ruff・clippy などの設定)と、共通の静的ルール(`.github/workflows/static-rules.yml` があるとき)が見つけるものは指摘しない。CI が安く見つけるので、言い直さなくてよい。
+            - 指摘のうち、動きの意味を追わなくても構文の形や設定だけで機械的に見つけられそうなものには、本文の最後に「(静的解析で拾えそう:<ツール名>)」と添える(ルール名が確かなら添えてもよい)。週に1度の収集が、これを手がかりにルールの候補を選ぶ。確かでなければ添えない。
+
             ## してはいけないこと
             - コードを直す、コミットする、push する。直すのは作者です。コメントだけを残してください。
             - ラベルを付ける・外す、マージする。ラベルはこの workflow のあとのジョブが、あなたの `verdict` を見て付けます。
@@ -222,7 +226,10 @@ jobs:
           gh label create マージ予約 --color 0e8a16 \
             --description "レビュー済み。向き先が main になったら自動マージを入れる" 2>/dev/null || true
           gh pr edit "$PR" --add-label マージ予約
-          gh workflow run merge-reservation.yml --ref "$DEFAULT_BRANCH"
+          # shiroinock/workflows itself has no マージ予約 caller (its merge-reservation.yml is the
+          # shared one, which takes no workflow_dispatch); such a PR keeps the label and is merged by hand.
+          gh workflow run merge-reservation.yml --ref "$DEFAULT_BRANCH" ||
+            echo "::warning::マージ予約の workflow を起動できなかった(templates/merge-reservation.yml を置いていない?)。自動マージは入らないので、手でマージする"
 
   # The check to make required: it passes only when Claude reviewed this push and found nothing to
   # fix, so a PR with findings cannot be merged, by hand or otherwise. The review job itself ends

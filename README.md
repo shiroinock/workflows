@@ -8,6 +8,7 @@ shiroinock のリポジトリで共通に使う GitHub Actions の再利用ワ�
 | `claude-review.yml` | 同じリポジトリのブランチから来た、下書きでない PR を Claude Code がレビューする。ボットの PR や push は `allowed_bots`(既定は Renovate と、CI の直しを push する Claude)に挙げたものだけ。直す指摘が無ければラベル「マージ予約」を付ける。検査 `review / verdict` は、指摘が残っている間は落ちる(必須の検査にする)。直さなくてもマージできるが直す価値のある小さい指摘は、マージを止めずに issue「あとで直す」へ PR ごとにまとめる(`collect_nits: false` で止める。呼ぶ側は `issues: write` を渡す) |
 | `claude-fix-ci.yml` | PR の CI が落ちたら、Claude Code が原因を読んで枝を直し、push する(CI とレビューが走り直す)。人が直すべきもの、または決めた回数(既定 2 回)で直らないものは、PR で持ち主にメンションし、ラベル「人の手が要る」を付けて止まる。下書きとボットの PR には手を出さない |
 | `merge-reservation.yml` | 「マージ予約」の付いた PR が既定ブランチに向いたら、自動マージ(マージコミット)を入れる。積み重ねた PR は、下の PR がマージされて付け替わるまで待つ |
+| `static-rules.yml` | 共通の静的ルール(`static-rules/` の ast-grep のルール)に引っかかるコードのある PR を落とす(`rules / rules`)。push はしない。手元で `nix run github:shiroinock/workflows#rules -- --fix` を流すと直せるものは直る。外したいルールは `.github/static-rules-off` に書く |
 
 ## 入れ方
 
@@ -22,6 +23,23 @@ shiroinock のリポジトリで共通に使う GitHub Actions の再利用ワ�
 5. 既定ブランチのルールセットで、CI のチェックを必須にする。必須のチェックが無いと、自動マージは CI の結果を待たずにすぐマージする。
    Claude のレビューの `review / verdict` も必須にする。指摘が残っている PR は、手でもマージできなくなる(workflow を変える PR は Claude がレビューできないので通り、人が見てマージする)。
 
+## レビューの指摘を静的解析に回すサイクル
+
+Claude のレビュー(PR ごとにトークンを使う)が繰り返し出す指摘のうち、静的解析で安く早く見つけられるものを、ルールにして CI と手元で見つけ・直すようにしていく。
+
+1. **集めて選ぶ**(このリポジトリの `rule-harvest.yml`、毎週月曜):全リポジトリの Claude の行コメントと issue「あとで直す」の指摘を集め(トークンは使わない)、Claude(Sonnet)が1週分をまとめて1度だけ読んで、静的解析に回せるものを選ぶ。大半は動きの意味を追わないと分からない指摘なので落とす。残ったものは、置き場所(下の順番)と元になった指摘を付けて、issue「ルール候補」に書く。同じ形が次の週にも出たら、その issue に足す。
+2. **人が選ぶ**:採用するものはルールにする PR を出し、見送るものは「Close as not planned」で閉じる(もう出さない)。
+3. **ルールにする**:置き場所は `static-rules/README.md` の順番で決める。そのリポジトリがすでに回しているツールに組み込みのルールがあればそれを有効にし、型の情報が要るものは型を扱えるツールに任せ、どのツールにも無く構文の形だけで判定できるものだけを `static-rules/` に ast-grep で書く。`static-rules/` を変える PR では、`rules-impact.yml` が全リポジトリの既定ブランチに当てた件数を出す(誤検知を見るため)。
+4. **見つけて直す**:CI の `static-rules.yml` が落とし、手元の `nix run github:shiroinock/workflows#rules -- --fix` が直す。CI からは push しない(GITHUB_TOKEN の push では次の検査が走らないため)。
+5. **重ねない**:レビューのプロンプトは、CI の lint と共通の静的ルールで見つかるものを指摘しないように、また静的解析で拾えそうな指摘には目印を付けるようにしている。ツールの版上げで組み込みのルールが代わりになったら、ast-grep のルールを消す候補も出る。
+
+`rule-harvest.yml` を動かすには、このリポジトリに次を入れる。
+
+- シークレット `CLAUDE_CODE_OAUTH_TOKEN` と、[Claude の GitHub App](https://github.com/apps/claude)。
+- シークレット `HARVEST_TOKEN`:非公開のリポジトリも読むための、オーナーの fine-grained token(すべてのリポジトリに Contents・Issues・Pull requests の読み取り)。無いと公開リポジトリだけを読む。`rules-impact.yml` も使う。
+
+このリポジトリは公開なので、非公開のリポジトリの中身は外に出さない。集めたものはランナーの外に出さず(artifact にもログにも出さない)、issue には非公開のリポジトリの名前とリンクを伏せて書き、Claude にもそのコードや識別子を書かないように頼んでいる。
+
 ## 決まりごと
 
 - Claude のジョブは読むこととコメントだけ。ラベルとマージは、Claude の構造化した判定だけを見る別のジョブが行う。
@@ -29,6 +47,14 @@ shiroinock のリポジトリで共通に使う GitHub Actions の再利用ワ�
 - `.github/workflows` を変える PR は GITHUB_TOKEN ではマージできないので、手でマージする。
 - ワークフローを変える PR では、Claude Code Action が既定ブランチと同じ内容か確かめるため、その PR のレビューは走らない。そのときはレビューの検査を通った扱いにし、理由を PR に1度だけコメントする。手で見てマージする。マージしたあとの PR から動く。
 - 積み重ねた PR では向き先の枝の workflow が使われるので、向き先が古いままだと同じ理由でレビューが走らない。PR の差に workflow の変更が無いのにレビューが走らなかったときは、ジョブを失敗にして見えるようにしている。
+
+## このリポジトリの Claude
+
+ここにある共通の workflow を、このリポジトリ自身からも呼んでいる(`claude-code-review.yml` と `claude-mention.yml`。同じリポジトリの `./.github/workflows/…` を呼ぶので、PR の版の workflow が動く)。
+
+- レビュー:`.github/workflows` を変える PR は Claude Code Action がレビューしないので、ここの PR の多くは通った扱いになり、手で見てマージする。`static-rules/`・`scripts/`・文書だけを変える PR はレビューされる。マージ予約の workflow は置いていないので、「マージ予約」が付いても自動マージは入らず、手でマージする。
+- `@claude`:issue「ルール候補」で `@claude` と書くと、ルールを足す PR を頼める。
+- シークレット `CLAUDE_CODE_OAUTH_TOKEN` と Claude の GitHub App が要る(`rule-harvest.yml` と同じもの)。
 
 ## このリポジトリの検査
 
@@ -39,6 +65,7 @@ shiroinock のリポジトリで共通に使う GitHub Actions の再利用ワ�
 - pinact:アクションをコミットの SHA で固定しているか(`pinact run` で固定し直せる)
 - renovate-config-validator:共通の Renovate 設定とテンプレート
 - `node --check`:`scripts/` のスクリプト
+- `ast-grep test`:共通の静的ルールとそのテスト
 
 ```bash
 nix flake check   # CI と同じ検査

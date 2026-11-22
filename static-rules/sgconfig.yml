@@ -1,0 +1,6 @@
+# The shared ast-grep rules. Run them with `nix run github:shiroinock/workflows#rules`
+# (add `-- --fix` to apply the fixes). See static-rules/README.md for when a rule belongs here.
+ruleDirs:
+  - rules
+testConfigs:
+  - testDir: tests
