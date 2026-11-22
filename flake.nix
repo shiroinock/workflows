@@ -45,6 +45,8 @@
       in
       {
         packages.lint = lint;
+        # Called by .github/workflows/pinact.yml in other repositories, at the version locked here.
+        packages.pinact = pkgs.pinact;
         apps.default = flake-utils.lib.mkApp { drv = lint; };
 
         checks.lint = pkgs.runCommand "lint" { } ''
