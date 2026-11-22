@@ -6,7 +6,7 @@ shiroinock のリポジトリで揃えるツールと版。新しく作るリポ
 |---|---|---|
 | Node | 24(LTS) | ルートに `.node-version`(中身は `24`)。CI は `actions/setup-node` の `node-version-file: .node-version`。ルートの `package.json` の `engines.node` は `>=24`。npm に公開するパッケージの `engines` は、利用者に約束する最低の版のままにする(上げるなら破壊的変更として扱う)。flake の開発シェルは `nodejs_24` |
 | パッケージマネージャ | pnpm 10 | `package.json` の `packageManager` に `pnpm@10.x.y` を書く。ロックファイルは `pnpm-lock.yaml` だけ。CI は `pnpm/action-setup` で `packageManager` の版を使う。flake は `pnpm_10` |
-| lint と整形 | Biome | `biome.json` を置き、ESLint と Prettier は使わない |
+| lint と整形 | Biome | `biome.json` を置き、ESLint と Prettier は使わない。レビューの指摘から足すルールの置き場所は `static-rules/README.md` の順番で決める |
 | テスト(JS/TS) | Vitest | |
 | TypeScript | 安定版の最新 | Renovate で上げる |
 | Python | uv、3.13 | `pyproject.toml` の `requires-python` と `.python-version`。ロックファイルは `uv.lock`。lint と整形は Ruff、テストは pytest |

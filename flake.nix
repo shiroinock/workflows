@@ -23,7 +23,29 @@
           pkgs.pinact
           pkgs.renovate
           pkgs.nodejs_24
+          pkgs.ast-grep
         ];
+        # The shared ast-grep rules, run on the current directory. `--fix` applies the fixes.
+        # Rule ids listed in .github/static-rules-off (one per line, # starts a comment) are off.
+        rules = pkgs.writeShellApplication {
+          name = "rules";
+          runtimeInputs = [ pkgs.ast-grep ];
+          text = ''
+            off=()
+            if [ -f .github/static-rules-off ]; then
+              while IFS= read -r line || [ -n "$line" ]; do
+                id="''${line%%#*}"
+                id="''${id//[[:space:]]/}"
+                [ -n "$id" ] && off+=("--off=$id")
+              done < .github/static-rules-off
+            fi
+            if [ "''${1:-}" = --fix ]; then
+              shift
+              set -- --update-all "$@"
+            fi
+            exec ast-grep scan --config ${./static-rules}/sgconfig.yml "''${off[@]}" "$@"
+          '';
+        };
         # Every check here runs offline, inside the Nix sandbox.
         lint = pkgs.writeShellApplication {
           name = "lint";
@@ -40,6 +62,13 @@
             renovate-config-validator renovate/default.json templates/renovate.json renovate.json
             echo "== node --check"
             node --check scripts/merge-reservation.mjs
+            node --check scripts/harvest-findings.mjs
+            echo "== ast-grep: the shared rules and their tests"
+            if find static-rules/rules -name '*.yml' | grep -q .; then
+              ast-grep test --config static-rules/sgconfig.yml --skip-snapshot-tests
+            else
+              echo "ルールはまだ無い"
+            fi
           '';
         };
       in
@@ -47,6 +76,9 @@
         packages.lint = lint;
         # Called by .github/workflows/pinact.yml in other repositories, at the version locked here.
         packages.pinact = pkgs.pinact;
+        # Called by .github/workflows/static-rules.yml in other repositories, and locally.
+        packages.rules = rules;
+        apps.rules = flake-utils.lib.mkApp { drv = rules; };
         apps.default = flake-utils.lib.mkApp { drv = lint; };
 
         checks.lint = pkgs.runCommand "lint" { } ''

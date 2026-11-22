@@ -1,0 +1,75 @@
+# On a PR that changes the shared ast-grep rules, runs the PR's rules over the default branch of
+# every repository of the owner and writes how many places each rule matches to the job summary.
+# A rule that matches far from the review findings it came from is likely a false positive; narrow
+# it before merging. It never fails the PR; it is there to be read. See static-rules/README.md.
+#
+# HARVEST_TOKEN (read access to contents) reaches the private repositories too. Their matches are
+# shown only as counts, since this repository and its logs are public.
+name: ルールの当たり方
+
+on:
+  pull_request:
+    paths:
+      - static-rules/**
+      - flake.nix
+      - flake.lock
+
+permissions: {}
+
+jobs:
+  impact:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read # check out the repository
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+
+      # The token is only in this step; the rules run below without it.
+      - name: リポジトリの既定ブランチを取ってくる
+        env:
+          GH_TOKEN: ${{ secrets.HARVEST_TOKEN || github.token }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/repos"
+          gh repo list "$OWNER" --source --no-archived --limit 200 --json nameWithOwner,isPrivate \
+            > "$RUNNER_TEMP/repos.json"
+          jq -r '.[].nameWithOwner' "$RUNNER_TEMP/repos.json" | while IFS= read -r repo; do
+            gh repo clone "$repo" "$RUNNER_TEMP/repos/$repo" -- --depth 1 --quiet ||
+              echo "::warning::$repo を取ってこられなかった"
+          done
+
+      - name: PR のルールを当てて数える
+        run: |
+          nix build .#rules --out-link "$RUNNER_TEMP/rules"
+          {
+            echo "## PR のルールが当たる場所"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          all="$RUNNER_TEMP/matches.jsonl"
+          : > "$all"
+          jq -c '.[]' "$RUNNER_TEMP/repos.json" | while IFS= read -r r; do
+            repo=$(jq -r .nameWithOwner <<<"$r")
+            private=$(jq -r .isPrivate <<<"$r")
+            dir="$RUNNER_TEMP/repos/$repo"
+            [ -d "$dir" ] || continue
+            (cd "$dir" && "$RUNNER_TEMP/rules/bin/rules" --json=stream || true) |
+              jq -c --arg repo "$repo" --argjson private "$private" \
+                '{repo: $repo, private: $private, rule: .ruleId, file: .file, line: (.range.start.line + 1)}' >> "$all"
+          done
+          if [ ! -s "$all" ]; then
+            echo "どのリポジトリにも当たらなかった。" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # Public repositories show where; private ones only how many.
+          jq -rs '
+            group_by(.rule)[] |
+            "### `\(.[0].rule)`(\(length) か所)", "",
+            ([.[] | select(.private | not)] | group_by(.repo)[] |
+              "- \(.[0].repo):\(length) か所(\([.[:5][] | "`\(.file):\(.line)`"] | join("、"))\(if length > 5 then " ほか" else "" end))"),
+            ([.[] | select(.private)] | if length > 0 then "- 非公開のリポジトリ \(map(.repo) | unique | length) 個:\(length) か所" else empty end),
+            ""' "$all" >> "$GITHUB_STEP_SUMMARY"
