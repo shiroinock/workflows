@@ -15,7 +15,8 @@
   },
   "osvVulnerabilityAlerts": true,
   "vulnerabilityAlerts": {
-    "labels": ["依存の更新", "セキュリティ"]
+    "labels": ["依存の更新", "セキュリティ"],
+    "minimumReleaseAge": "3 days"
   },
   "customManagers": [
     {
@@ -33,6 +34,12 @@
     }
   ],
   "packageRules": [
+    {
+      "description": "サプライチェーン攻撃に備え、レジストリの新しい版は公開から7日たってから PR にする。脆弱性の修正は vulnerabilityAlerts で3日に縮める。間接の依存は、各リポジトリの pnpm の minimumReleaseAge(3日)が見る",
+      "matchDatasources": ["npm", "pypi", "crate"],
+      "minimumReleaseAge": "7 days",
+      "internalChecksFilter": "strict"
+    },
     {
       "description": "minor と patch は1つの PR にまとめる",
       "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
