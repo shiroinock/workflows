@@ -207,6 +207,9 @@ jobs:
       - name: Claude Code で直す
         id: claude
         if: steps.gate.outputs.stale == ''
+        # Shorter than the job's: a job that times out is cancelled and its last step would not
+        # tell anyone; a step that times out only fails, and the last step says so.
+        timeout-minutes: 35
         uses: anthropics/claude-code-action@acfe7992852970efb4fee683d63d628e3e52df67 # v1.0.286
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
