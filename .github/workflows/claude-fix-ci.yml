@@ -118,9 +118,10 @@ jobs:
         with:
           node-version-file: ${{ hashFiles('.node-version') != '' && '.node-version' || 'package.json' }}
 
-      # pnpm, for repositories that lock with it: the version pinned in packageManager, else pnpm 10.
+      # pnpm, for repositories that lock with it anywhere (a service in a subdirectory, too): the
+      # version pinned in the root packageManager, else pnpm 10.
       - name: pnpm を用意する
-        if: hashFiles('pnpm-lock.yaml') != ''
+        if: hashFiles('**/pnpm-lock.yaml') != ''
         env:
           COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
         run: |
