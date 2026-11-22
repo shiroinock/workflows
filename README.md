@@ -36,10 +36,12 @@ nix run github:shiroinock/workflows#repo-baseline -- <名前> ...           # �
 dotfiles では `repo-new`・`repo-baseline` という名前で入っている。`repo-baseline` は何度流してもよく、次を入れる。
 
 - `templates/` のうち、まだ無いもの(Renovate の設定を含む)。あるものは書き換えない。空のリポジトリには最初のコミットとして入れ、中身のあるリポジトリには PR を出す(`.github/workflows` を変えるので、手で見てマージする)。非公開のリポジトリでは、`merge-reservation.yml` の schedule を外す。
+  - 要らないテンプレートは、リポジトリの `.github/baseline-skip` に `templates/` でのファイル名を1行ずつ書く。入れる PR を閉じた(マージしなかった)ときも、その PR のファイルはもう入れない。
+  - API のエラーは「無い」「空」とみなさず、その手順を飛ばす。失敗が1つでもあれば 1 で終わる。
 - シークレット `CLAUDE_CODE_OAUTH_TOKEN`:無ければ 1Password から入れる(手元で `op` が使えるときだけ。参照は `CLAUDE_TOKEN_OP_REF` で替えられる)。
 - マージの設定、シークレットスキャン、Dependabot のアラート、ルールセット「main を守る」。
 
-`repo-new` を使わずに作ったリポジトリ(ブラウザ、素の `gh repo create`)は、週に1度の `baseline.yml` が拾って同じものを入れる。ここに足したテンプレートも、これで既存のリポジトリに配られる。トピック `no-baseline` を付けたリポジトリは触らない。動かすには、このリポジトリにシークレット `BASELINE_TOKEN`(オーナーの fine-grained token。すべてのリポジトリに Contents・Pull requests・Workflows・Administration の書き込み)を入れる。ここからは `CLAUDE_CODE_OAUTH_TOKEN` を入れられないので、無いリポジトリはログに出るだけ。ログは公開なので、非公開のリポジトリの名前は出さない。
+`repo-new` を使わずに作ったリポジトリ(ブラウザ、素の `gh repo create`)は、週に1度の `baseline.yml` が拾って同じものを入れる。ここに足したテンプレートも、これで既存のリポジトリに配られる。トピック `no-baseline` を付けたリポジトリは触らない。動かすには、このリポジトリにシークレット `BASELINE_TOKEN`(オーナーの fine-grained token。すべてのリポジトリに Contents・Pull requests・Workflows・Administration の書き込みと、Secrets の読み取り)を入れる。ここからは `CLAUDE_CODE_OAUTH_TOKEN` を入れられないので、無いリポジトリはログに出るだけ。ログは公開なので、非公開のリポジトリと、読めなかったリポジトリの名前は出さない。
 
 [Claude の GitHub App](https://github.com/apps/claude) は、「All repositories」で入れておくと、新しいリポジトリにも自動で入る。
 
