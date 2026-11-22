@@ -34,9 +34,9 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write # push the badge branch
-    # Two runs close together must not let the older result land last.
+    # Two runs close together must not let the older result land last on the same branch.
     concurrency:
-      group: dept-${{ github.repository }}
+      group: dept-${{ github.repository }}-${{ inputs.branch }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
