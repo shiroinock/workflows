@@ -133,6 +133,7 @@ jobs:
       result: ${{ steps.claude.outputs.structured_output }}
       pushed: ${{ steps.push.outputs.pushed }}
       stale: ${{ steps.gate.outputs.stale }}
+      labeled: ${{ steps.handoff.outputs.labeled }}
     steps:
       # Several workflows can fail on the same commit, and each sends its own workflow_run. The
       # concurrency above only queues the later ones, so check again once this one holds it:
@@ -221,7 +222,7 @@ jobs:
 
             ## 手順
             1. リポジトリの `AGENTS.md`・`CLAUDE.md`・`CONTRIBUTING.md` を読み、決まりと確かめ方を知る(無いものは飛ばす)。
-            2. `gh run view ${{ github.event.workflow_run.id }} --log-failed` で、落ちたところを読む。`gh pr view ${{ needs.triage.outputs.pr }}` と `gh pr diff ${{ needs.triage.outputs.pr }}` で、PR が何をしようとしているかを読む。
+            2. `gh run view ${{ github.event.workflow_run.id }} --log-failed` で、落ちたところを読む。同じコミットでほかのワークフローも落ちていることがあるので、`gh pr checks ${{ needs.triage.outputs.pr }}` で落ちた検査を見て、Claude のレビュー・アクションの固定・共通の静的ルール以外の落ちた実行も `gh run view <id> --log-failed` で読み、まとめて直す(1回の push で済ませる)。`gh pr view ${{ needs.triage.outputs.pr }}` と `gh pr diff ${{ needs.triage.outputs.pr }}` で、PR が何をしようとしているかを読む。
             3. 原因を決める。PR の変更が原因で、PR の目的を変えずに直せるなら直す。必要なら依存を入れ(ロックファイルに合わせて `npm ci` か `pnpm install --frozen-lockfile`)、落ちた検査を手元で流して、通ることを確かめる。
             4. 次のときは直さず、`needs_human` で返す。
                - 直し方が PR の目的や設計の判断にかかわる。
@@ -242,7 +243,7 @@ jobs:
             --model ${{ inputs.model }}
             --permission-mode default
             --json-schema '{"type":"object","properties":{"result":{"type":"string","enum":["fixed","needs_human"]},"summary":{"type":"string"}},"required":["result","summary"]}'
-            --allowedTools "Read,Glob,Grep,Edit,Write,Task,Agent,Bash(gh run view:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git add:*),Bash(git commit:*),Bash(git push),Bash(npm ci:*),Bash(npm install:*),Bash(npm run:*),Bash(npm test:*),Bash(npx:*),Bash(node:*),Bash(pnpm install:*),Bash(pnpm run:*),Bash(pnpm test:*),Bash(pnpm exec:*),Bash(pnpm --filter:*),Bash(pnpm -r:*)"
+            --allowedTools "Read,Glob,Grep,Edit,Write,Task,Agent,Bash(gh run view:*),Bash(gh pr checks:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git add:*),Bash(git commit:*),Bash(git push),Bash(npm ci:*),Bash(npm install:*),Bash(npm run:*),Bash(npm test:*),Bash(npx:*),Bash(node:*),Bash(pnpm install:*),Bash(pnpm run:*),Bash(pnpm test:*),Bash(pnpm exec:*),Bash(pnpm --filter:*),Bash(pnpm -r:*)"
             --disallowedTools "Bash(git push --force:*),Bash(git push -f:*),Bash(git push origin:*),Bash(gh pr edit:*),Bash(gh pr merge:*),Bash(gh pr comment:*)"
 
       # Whether Claude's commit reached the PR's branch: the branch moved past the failed commit
@@ -271,8 +272,11 @@ jobs:
       # Hand the PR to a person here, not in report: the next fix waiting for this concurrency
       # group starts as soon as this job ends, and its check must already see the label. report
       # then comments and mentions the owner. If the branch moved meanwhile, the newer CI decides.
+      # Not on a cancelled run: report is skipped then, and a label without a comment would stop
+      # Claude on this PR with nobody told.
       - name: 直せなかったら、人に渡すラベルを付ける
-        if: always() && steps.gate.outputs.stale == '' && steps.push.outputs.pushed != 'true'
+        id: handoff
+        if: ${{ !cancelled() && steps.gate.outputs.stale == '' && steps.push.outputs.pushed != 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -280,11 +284,14 @@ jobs:
           FAILED: ${{ github.event.workflow_run.head_sha }}
         run: |
           if [ "$(gh pr view "$PR" --json headRefOid --jq .headRefOid)" != "$FAILED" ]; then
-            echo "ラベルは付けない:枝が進んだので、新しい CI に任せる"; exit 0
+            echo "ラベルは付けない:枝が進んだので、新しい CI に任せる"
+            echo "labeled=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           gh label create 人の手が要る --color d93f0b \
             --description "CI の失敗を Claude が直せなかった。人が見る" 2>/dev/null || true
           gh pr edit "$PR" --add-label 人の手が要る
+          echo "labeled=true" >> "$GITHUB_OUTPUT"
 
   # Says what happened on the PR. Hands it to a person when Claude could not fix it.
   report:
@@ -310,6 +317,7 @@ jobs:
           PUSHED: ${{ needs.fix.outputs.pushed }}
           RESULT: ${{ needs.fix.outputs.result }}
           REASON: ${{ needs.triage.outputs.reason }}
+          LABELED: ${{ needs.fix.outputs.labeled }}
         run: |
           summary=$(printf '%s' "$RESULT" | jq -r '.summary // ""' 2>/dev/null || true)
           result=$(printf '%s' "$RESULT" | jq -r '.result // ""' 2>/dev/null || true)
@@ -319,8 +327,12 @@ jobs:
           fi
           # Someone pushed while Claude was fixing: that push starts a newer CI, which decides
           # again. Handing the PR to a person here would stop Claude from fixing the new commit.
-          if [ -z "$REASON" ] && [ "$(gh pr view "$PR" --json headRefOid --jq .headRefOid)" != "$FAILED" ]; then
-            echo "知らせない:直しているあいだに枝が進んだので、新しい CI に任せる"; exit 0
+          # fix decided this when it labeled (or not); look at the branch only when it could not.
+          if [ -z "$REASON" ]; then
+            if [ "$LABELED" = "false" ] ||
+              { [ -z "$LABELED" ] && [ "$(gh pr view "$PR" --json headRefOid --jq .headRefOid)" != "$FAILED" ]; }; then
+              echo "知らせない:直しているあいだに枝が進んだので、新しい CI に任せる"; exit 0
+            fi
           fi
           case "$REASON" in
             "下書きの PR は、作っている人に任せる"|"ボットの PR では、枝のコマンドを Claude のトークンのそばで動かさない"|"すでに人に渡している")
