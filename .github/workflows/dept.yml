@@ -43,7 +43,7 @@ jobs:
         with:
           persist-credentials: false
       - id: dept
-        uses: shiroinock/dept@814765f8b72a32a80586659fdfd1727581186ebe # v0.3.0
+        uses: shiroinock/dept@e40ab8cb41e50a4695ac9cf95bd0630691271b9a # v0.3.1
         with:
           path: ${{ inputs.path }}
           args: ${{ inputs.args }}
