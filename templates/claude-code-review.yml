@@ -1,4 +1,5 @@
 # Claude Code reviews every ready PR, and labels it マージ予約 when nothing needs fixing.
+# Make "review / verdict" a required check: it fails while Claude's findings remain.
 # The jobs live in shiroinock/workflows; change them there, not here.
 name: Claude のレビュー
 
