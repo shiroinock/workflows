@@ -1,0 +1,48 @@
+# Reusable: fails a PR when a workflow uses an action by a tag or branch instead of a commit SHA.
+# A tag can be moved to other code at any time; a SHA cannot. Fix it with `pinact run`.
+# The calls to shiroinock/workflows at @main are left alone (see pinact/shared.yaml); a
+# repository with its own .pinact.yaml uses that instead. Call it from templates/pinact.yml.
+#
+# pinact comes from this repository's flake.lock, so the version is fixed and Renovate raises it.
+name: アクションの固定
+
+on:
+  workflow_call:
+    inputs:
+      workflows_ref:
+        description: >-
+          pinact と共通の設定を取ってくる shiroinock/workflows の版。この workflow を SHA で呼ぶときは、
+          同じ SHA を渡す。
+        type: string
+        default: main
+
+permissions: {}
+
+jobs:
+  pinact:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read # check out the repository
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+      - name: pinact で確かめる
+        env:
+          REF: ${{ inputs.workflows_ref }}
+          # Only to look up the SHA of an unpinned action for the error message; read-only.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          config=.pinact.yaml
+          [ -f "$config" ] || config=.github/pinact.yaml
+          if [ ! -f "$config" ]; then
+            config="$RUNNER_TEMP/pinact.yaml"
+            curl -fsSL "https://raw.githubusercontent.com/shiroinock/workflows/$REF/pinact/shared.yaml" -o "$config"
+          fi
+          echo "設定:$config"
+          if ! nix run "github:shiroinock/workflows/$REF#pinact" -- run --check -c "$config"; then
+            echo "::error::SHA で固定していないアクションがあります。手元で \`pinact run\` を流すと固定できます(nix run github:shiroinock/workflows#pinact -- run)。"
+            exit 1
+          fi

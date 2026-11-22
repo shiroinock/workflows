@@ -1,0 +1,7 @@
+# pinact の共通の設定。.pinact.yaml を持たないリポジトリの検査(.github/workflows/pinact.yml)で使う。
+version: 3
+ignore_actions:
+  # The shared workflows are called at @main on purpose, or at a SHA that Renovate raises. They
+  # have no release tags, so a SHA cannot carry a version comment either.
+  - name: shiroinock/workflows/.*
+    ref: .*

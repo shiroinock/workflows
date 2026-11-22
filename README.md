@@ -18,7 +18,8 @@ shiroinock のリポジトリで共通に使う GitHub Actions の再利用ワ�
    - 公開リポジトリなど、共通側の変更をすぐには受けたくないときは、`uses:` の `@main` を確かめたコミットの SHA に替える。`merge-reservation.yml` は `scripts/` を別に取ってくるので、`workflows_ref` にも同じ SHA を渡す(渡さないと main の `scripts/` が動く)。SHA で固定した参照は、共通の Renovate 設定を読んでいれば、main が進むたびに Renovate が PR で上げ、必須の検査が通れば Renovate が自動でマージする(Claude のレビューは workflow を変える PR では走らず、通った扱いになる)。
 2. シークレット `CLAUDE_CODE_OAUTH_TOKEN` を登録する(`claude setup-token` で発行したもの)。
 3. [Claude の GitHub App](https://github.com/apps/claude) をそのリポジトリに入れる。
-4. 既定ブランチのルールセットで、CI のチェックを必須にする。必須のチェックが無いと、自動マージは CI の結果を待たずにすぐマージする。
+4. アクションを SHA で固定する(`nix run github:shiroinock/workflows#pinact -- run`)。`templates/pinact.yml` を置くと、固定していないアクションのある PR を落とす(`pinact / pinact`)。固定した SHA は、共通の Renovate 設定(`helpers:pinGitHubActionDigests`)が上げ、あとから足したアクションも固定する。
+5. 既定ブランチのルールセットで、CI のチェックを必須にする。必須のチェックが無いと、自動マージは CI の結果を待たずにすぐマージする。
 
 ## 決まりごと
 
