@@ -2,7 +2,8 @@
 # labels it マージ予約 when nothing needs fixing. merge-reservation.yml then turns on auto-merge once
 # the PR points at the default branch. Claude only reads and comments; the label is added by a later
 # job that reads Claude's structured verdict, so the Claude job never holds a token that can label
-# or merge. Call it from templates/claude-code-review.yml.
+# or merge. The verdict job fails while findings remain; make "review / verdict" a required check
+# so such a PR cannot be merged. Call it from templates/claude-code-review.yml.
 name: Claude のレビュー
 
 on:
@@ -213,6 +214,45 @@ jobs:
             --description "レビュー済み。向き先が main になったら自動マージを入れる" 2>/dev/null || true
           gh pr edit "$PR" --add-label マージ予約
           gh workflow run merge-reservation.yml --ref "$DEFAULT_BRANCH"
+
+  # The check to make required: it passes only when Claude reviewed this push and found nothing to
+  # fix, so a PR with findings cannot be merged, by hand or otherwise. The review job itself ends
+  # with success even when it leaves findings. A PR that changes .github/workflows passes, since
+  # Claude cannot review it (see above) and it is merged by hand after a person reads it. A draft,
+  # a fork's PR, or a review that did not finish fails. Only the verdict and the count are read.
+  verdict:
+    needs: review
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: レビューの指摘が無いか確かめる
+        env:
+          RESULT: ${{ needs.review.result }}
+          SKIPPED: ${{ needs.review.outputs.skipped }}
+          # Claude's JSON stays in the environment; jq reads two fields, nothing of it becomes code.
+          REVIEW: ${{ needs.review.outputs.result }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+        run: |
+          VERDICT=$(jq -r '.verdict // ""' <<<"${REVIEW:-null}" 2>/dev/null || true)
+          FINDINGS=$(jq -r '.findings // ""' <<<"${REVIEW:-null}" 2>/dev/null || true)
+          if [ "$RESULT" = success ] && [ "$VERDICT" = clean ] && [ "$FINDINGS" = 0 ]; then
+            echo "Claude のレビューで、直す指摘は無かった"
+            exit 0
+          fi
+          if [ "$RESULT" = success ] && [ "$SKIPPED" = workflow_change ]; then
+            echo "::notice::.github/workflows を変える PR なので、Claude はレビューできない。手で見てマージする"
+            exit 0
+          fi
+          if [ "$DRAFT" = true ]; then
+            echo "::error::下書きの PR はレビューしない。レビューできる状態にすると、レビューが走る"
+          elif [ "$RESULT" != success ]; then
+            echo "::error::Claude のレビューが終わらなかった($RESULT)。「review」のログを見る"
+          else
+            echo "::error::Claude のレビューに直す指摘がある($FINDINGS 件)。PR のコメントを見て直し、push するともう一度レビューされる"
+          fi
+          exit 1
 
   # Leaves one comment on a PR whose review could not run because it changes .github/workflows.
   explain:
