@@ -106,7 +106,7 @@ jobs:
       result: ${{ steps.claude.outputs.structured_output }}
       pushed: ${{ steps.push.outputs.pushed }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
@@ -114,23 +114,30 @@ jobs:
 
       - name: Node を用意する
         if: hashFiles('.node-version', 'package.json') != ''
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: ${{ hashFiles('.node-version') != '' && '.node-version' || 'package.json' }}
 
       # pnpm, for repositories that lock with it anywhere (a service in a subdirectory, too): the
-      # version pinned in the root packageManager, else pnpm 10.
-      - name: pnpm を用意する
+      # version pinned in the root packageManager, else pnpm 10. pnpm/action-setup reads
+      # packageManager itself, and refuses a version given beside it.
+      - name: pnpm の版の決め方を調べる
+        id: pnpm
         if: hashFiles('**/pnpm-lock.yaml') != ''
-        env:
-          COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
         run: |
           if jq -e '.packageManager // "" | startswith("pnpm@")' package.json >/dev/null 2>&1; then
-            corepack enable
+            echo "pinned=true" >> "$GITHUB_OUTPUT"
           else
-            npm install -g pnpm@10
+            echo "pinned=false" >> "$GITHUB_OUTPUT"
           fi
-          pnpm --version
+      - name: pnpm を用意する(packageManager の版)
+        if: steps.pnpm.outputs.pinned == 'true'
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - name: pnpm を用意する(pnpm 10)
+        if: steps.pnpm.outputs.pinned == 'false'
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: 10
 
       # A bare `git push` then goes to the PR's branch and nowhere else.
       - name: PR の枝を用意する
@@ -144,7 +151,7 @@ jobs:
 
       - name: Claude Code で直す
         id: claude
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@acfe7992852970efb4fee683d63d628e3e52df67 # v1.0.286
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allow_fork_prs: 'false'

@@ -26,3 +26,21 @@ shiroinock のリポジトリで共通に使う GitHub Actions の再利用ワ�
 - `.github/workflows` を変える PR は GITHUB_TOKEN ではマージできないので、手でマージする。
 - ワークフローを変える PR では、Claude Code Action が既定ブランチと同じ内容か確かめるため、その PR のレビューは走らない。そのときはレビューの検査を通った扱いにし、理由を PR に1度だけコメントする。手で見てマージする。マージしたあとの PR から動く。
 - 積み重ねた PR では向き先の枝の workflow が使われるので、向き先が古いままだと同じ理由でレビューが走らない。PR の差に workflow の変更が無いのにレビューが走らなかったときは、ジョブを失敗にして見えるようにしている。
+
+## このリポジトリの検査
+
+ここの変更は、`@main` で呼ぶすべてのリポジトリにすぐ届く。そのため PR ごとに CI(`lint`)で次を確かめ、必須のチェックにしている。道具と版は `flake.nix` と `flake.lock` で決まり、手元でも同じものが流れる。
+
+- actionlint(`run:` の中は shellcheck):共通の workflow とテンプレートの文法・式・入力
+- zizmor:権限の広げすぎ、信頼できない値の埋め込み、SHA で固定していないアクションなど、Actions のセキュリティ
+- pinact:アクションをコミットの SHA で固定しているか(`pinact run` で固定し直せる)
+- renovate-config-validator:共通の Renovate 設定とテンプレート
+- `node --check`:`scripts/` のスクリプト
+
+```bash
+nix flake check   # CI と同じ検査
+nix run .         # 同じ検査を、作業中のファイルに対して流す
+nix develop       # 道具の入ったシェル
+```
+
+固定したアクションの SHA と `flake.lock` は、このリポジトリの Renovate(共通の設定を読む)が上げる。

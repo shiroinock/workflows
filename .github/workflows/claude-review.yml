@@ -69,6 +69,8 @@ jobs:
           REPO: ${{ github.event.repository.name }}
           PR: ${{ github.event.pull_request.number }}
         run: |
+          # The single quotes keep the GraphQL variables ($owner and the rest) away from the shell.
+          # shellcheck disable=SC2016
           ids=$(gh api graphql -F owner="$OWNER" -F repo="$REPO" -F number="$PR" -f query='
             query($owner: String!, $repo: String!, $number: Int!) {
               repository(owner: $owner, name: $repo) {
@@ -86,6 +88,7 @@ jobs:
             exit 0
           fi
           for id in $ids; do
+            # shellcheck disable=SC2016
             gh api graphql -F id="$id" -f query='
               mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }' \
               --silent || echo "::warning::$id を解決済みにできなかった"
@@ -114,14 +117,14 @@ jobs:
       skipped: ${{ steps.ran.outputs.skipped }}
     steps:
       # The merge commit; HEAD^1..HEAD is exactly what the PR changes.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 2
           persist-credentials: false
 
       - name: Claude Code でレビューする
         id: claude
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@acfe7992852970efb4fee683d63d628e3e52df67 # v1.0.286
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allow_fork_prs: 'false'
