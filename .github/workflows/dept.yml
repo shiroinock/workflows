@@ -1,5 +1,5 @@
 # Reusable: scores how far the dependencies lag behind their latest releases with dept
-# (https://github.com/shiroinock/dept) and puts a badge for the README on a branch.
+# (https://github.com/shiroinock/dept) and puts a badge and a report for the README on a branch.
 # The badge SVG is drawn by dept itself; no badge service or third-party API is used.
 # dept comes from its release after its build provenance is verified. Call it from templates/dept.yml.
 name: dept
@@ -22,7 +22,7 @@ on:
         type: boolean
         default: false
       branch:
-        description: バッジ(dept.svg)と結果(dept.json)を置くブランチ。空にすると push しない
+        description: バッジ(dept.svg)、レポート(dept.md)、結果(dept.json)を置くブランチ。空にすると push しない
         type: string
         default: dept-badge
 
@@ -43,7 +43,7 @@ jobs:
         with:
           persist-credentials: false
       - id: dept
-        uses: shiroinock/dept@39ecb840cbcf2c6f4159955fec9b84cde9d8ae5d # v0.2.0
+        uses: shiroinock/dept@814765f8b72a32a80586659fdfd1727581186ebe # v0.3.0
         with:
           path: ${{ inputs.path }}
           args: ${{ inputs.args }}
