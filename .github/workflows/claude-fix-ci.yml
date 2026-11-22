@@ -115,7 +115,9 @@ jobs:
   fix:
     needs: triage
     if: needs.triage.outputs.try == 'true'
-    # One fix per PR at a time; a newer failure waits for the one in progress.
+    # One fix per PR at a time. Only one waits behind the running one: a newer failure replaces
+    # (cancels) the waiting fix, which is fine, since the newest one reads every failed check of
+    # the commit anyway, and a cancelled fix says nothing.
     concurrency:
       group: claude-fix-ci-${{ needs.triage.outputs.pr }}
       cancel-in-progress: false
@@ -123,20 +125,16 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
-      # label the PR 人の手が要る in the last step, while this job still holds the concurrency
-      # group (the Claude GitHub App's token in reach here can do more than this already)
+      # comment on the PR and label it 人の手が要る in the last step, while this job still holds
+      # the concurrency group (the Claude GitHub App's token in reach here can do more already)
       pull-requests: write
       issues: write # create the label
       actions: read # read the failed run's logs
       id-token: write # the action exchanges it for the Claude GitHub App's token
-    outputs:
-      result: ${{ steps.claude.outputs.structured_output }}
-      pushed: ${{ steps.push.outputs.pushed }}
-      stale: ${{ steps.gate.outputs.stale }}
-      labeled: ${{ steps.handoff.outputs.labeled }}
     steps:
       # Several workflows can fail on the same commit, and each sends its own workflow_run. The
-      # concurrency above only queues the later ones, so check again once this one holds it:
+      # concurrency above lets one of them wait behind the running fix, so check again once this
+      # one holds it:
       # the branch may have moved (Claude's fix from the earlier one), or the PR may have been
       # handed to a person (the earlier fix labels it before releasing the group). Then there is
       # nothing left to do here.
@@ -269,49 +267,12 @@ jobs:
             echo "pushed=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # Hand the PR to a person here, not in report: the next fix waiting for this concurrency
-      # group starts as soon as this job ends, and its check must already see the label. report
-      # then comments and mentions the owner. If the branch moved meanwhile, the newer CI decides.
-      # Not on a cancelled run: report is skipped then, and a label without a comment would stop
-      # Claude on this PR with nobody told.
-      - name: 直せなかったら、人に渡すラベルを付ける
-        id: handoff
-        if: ${{ !cancelled() && steps.gate.outputs.stale == '' && steps.push.outputs.pushed != 'true' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          PR: ${{ needs.triage.outputs.pr }}
-          FAILED: ${{ github.event.workflow_run.head_sha }}
-        run: |
-          if [ "$(gh pr view "$PR" --json headRefOid --jq .headRefOid)" != "$FAILED" ]; then
-            echo "ラベルは付けない:枝が進んだので、新しい CI に任せる"
-            echo "labeled=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          gh label create 人の手が要る --color d93f0b \
-            --description "CI の失敗を Claude が直せなかった。人が見る" 2>/dev/null || true
-          gh pr edit "$PR" --add-label 人の手が要る
-          echo "labeled=true" >> "$GITHUB_OUTPUT"
-
-  # Says what happened on the PR. Hands it to a person when Claude could not fix it.
-  report:
-    needs: [triage, fix]
-    if: >-
-      !cancelled() && needs.triage.outputs.pr != '' && needs.fix.outputs.stale == '' &&
-      (needs.fix.result != 'skipped' || needs.triage.outputs.reason != '')
-    # One report per PR at a time, so that the label check below sees what an earlier one did
-    # (several workflows failing on the same commit each come here, e.g. once the fixes ran out).
-    # A group of its own: sharing fix's would let a waiting report replace a waiting fix.
-    concurrency:
-      group: claude-fix-ci-report-${{ needs.triage.outputs.pr }}
-      cancel-in-progress: false
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      pull-requests: write # comment and label
-      issues: write
-    steps:
+      # Says on the PR what happened, and hands it to a person when Claude could not fix it. All
+      # in this job, while it holds the concurrency group: the next fix waiting for the group
+      # starts as soon as this job ends, and its check must already see the label. Not on a
+      # cancelled run (nothing ran to report). If the branch moved meanwhile, the newer CI decides.
       - name: PR に知らせる
+        if: ${{ !cancelled() && steps.gate.outputs.stale == '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -319,11 +280,9 @@ jobs:
           OWNER: ${{ github.repository_owner }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
           FAILED: ${{ github.event.workflow_run.head_sha }}
-          FIX_RESULT: ${{ needs.fix.result }}
-          PUSHED: ${{ needs.fix.outputs.pushed }}
-          RESULT: ${{ needs.fix.outputs.result }}
-          REASON: ${{ needs.triage.outputs.reason }}
-          LABELED: ${{ needs.fix.outputs.labeled }}
+          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+          PUSHED: ${{ steps.push.outputs.pushed }}
+          RESULT: ${{ steps.claude.outputs.structured_output }}
         run: |
           summary=$(printf '%s' "$RESULT" | jq -r '.summary // ""' 2>/dev/null || true)
           result=$(printf '%s' "$RESULT" | jq -r '.result // ""' 2>/dev/null || true)
@@ -333,28 +292,12 @@ jobs:
           fi
           # Someone pushed while Claude was fixing: that push starts a newer CI, which decides
           # again. Handing the PR to a person here would stop Claude from fixing the new commit.
-          # fix decided this when it labeled (or not); look at the branch only when it could not.
-          if [ -z "$REASON" ]; then
-            if [ "$LABELED" = "false" ] ||
-              { [ -z "$LABELED" ] && [ "$(gh pr view "$PR" --json headRefOid --jq .headRefOid)" != "$FAILED" ]; }; then
-              echo "知らせない:直しているあいだに枝が進んだので、新しい CI に任せる"; exit 0
-            fi
+          if [ "$(gh pr view "$PR" --json headRefOid --jq .headRefOid)" != "$FAILED" ]; then
+            echo "知らせない:直しているあいだに枝が進んだので、新しい CI に任せる"; exit 0
           fi
-          case "$REASON" in
-            "下書きの PR は、作っている人に任せる"|"ボットの PR では、枝のコマンドを Claude のトークンのそばで動かさない"|"すでに人に渡している")
-              echo "知らせない:$REASON"; exit 0 ;;
-          esac
-          # Another report may have handed the PR over since triage looked. The label this run's
-          # fix put on is this run's to announce.
-          if [ "$LABELED" != "true" ] &&
-            gh pr view "$PR" --json labels --jq '[.labels[].name] | index("人の手が要る")' | grep -qv '^null$'; then
-            echo "知らせない:もう人に渡してある"; exit 0
-          fi
-          if [ -n "$REASON" ]; then
-            why="$REASON。"
-          elif [ "$result" = "needs_human" ]; then
+          if [ "$result" = "needs_human" ]; then
             why="Claude は、人が直す必要があると判断しました。"
-          elif [ "$FIX_RESULT" != "success" ]; then
+          elif [ "$CLAUDE_OUTCOME" != "success" ]; then
             why="直しのジョブが途中で失敗しました（実行のログを見てください）。"
           else
             why="直したと返しましたが、PR の枝に Claude のコミットが届いていません（push が断られた、あいだに push があった、など）。"
@@ -363,3 +306,41 @@ jobs:
             --description "CI の失敗を Claude が直せなかった。人が見る" 2>/dev/null || true
           gh pr edit "$PR" --add-label 人の手が要る
           gh pr comment "$PR" --body "$(printf '@%s CI の失敗（%s）を Claude では直せませんでした。%s\n\n%s\n\n直して push したら、ラベル「人の手が要る」を外してください（付いているあいだは Claude は直しにいきません）。' "$OWNER" "$RUN_URL" "$why" "$summary")"
+
+  # When triage decided not to try because the fixes ran out, hands the PR to a person. (fix says
+  # what happened itself when it ran.)
+  handoff:
+    needs: triage
+    if: needs.triage.outputs.try == 'false' && needs.triage.outputs.reason != ''
+    # One at a time per PR, so that the label check below sees what an earlier one did: several
+    # workflows failing on the same commit each come here once the fixes ran out. If a waiting
+    # one is replaced by a newer one, the newer one saw no label at triage either, and hands over.
+    concurrency:
+      group: claude-fix-ci-handoff-${{ needs.triage.outputs.pr }}
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write # comment and label
+      issues: write
+    steps:
+      - name: PR を人に渡す
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ needs.triage.outputs.pr }}
+          OWNER: ${{ github.repository_owner }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          REASON: ${{ needs.triage.outputs.reason }}
+        run: |
+          case "$REASON" in
+            "下書きの PR は、作っている人に任せる"|"ボットの PR では、枝のコマンドを Claude のトークンのそばで動かさない"|"すでに人に渡している")
+              echo "知らせない:$REASON"; exit 0 ;;
+          esac
+          if gh pr view "$PR" --json labels --jq '[.labels[].name] | index("人の手が要る")' | grep -qv '^null$'; then
+            echo "知らせない:もう人に渡してある"; exit 0
+          fi
+          gh label create 人の手が要る --color d93f0b \
+            --description "CI の失敗を Claude が直せなかった。人が見る" 2>/dev/null || true
+          gh pr edit "$PR" --add-label 人の手が要る
+          gh pr comment "$PR" --body "$(printf '@%s CI の失敗（%s）を Claude では直せませんでした。%s。\n\n直して push したら、ラベル「人の手が要る」を外してください（付いているあいだは Claude は直しにいきません）。' "$OWNER" "$RUN_URL" "$REASON")"
