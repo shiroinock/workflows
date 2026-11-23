@@ -5,6 +5,8 @@
 #
 # 入れるもの:
 #   - 共通のワークフロー:templates/ のうち、まだ無いもの(Renovate の設定もここ)。あるものは書き換えない。
+#     dept.yml は、ルートに dept が読めるロックファイル(pnpm-lock.yaml か package-lock.json)がある
+#     リポジトリにだけ入れる(無いと毎回失敗するため)。
 #     非公開のリポジトリでは、merge-reservation.yml の schedule を外す(Actions の無料枠を食うため)。
 #     空のリポジトリには最初のコミットとして入れ、中身のあるリポジトリには PR を出す。
 #     リポジトリの .github/baseline-skip に書いたテンプレート(1行に1つ、templates/ のファイル名)と、
@@ -125,6 +127,19 @@ has_renovate() { # <repo> <ref>: 0 there, 1 not there, 2 could not tell
   return 1
 }
 
+# dept reads these lockfiles at the root; without one its job fails every time.
+has_dept_lockfile() { # <repo> <ref>: 0 there, 1 not there, 2 could not tell
+  local f r unknown=0
+  for f in pnpm-lock.yaml package-lock.json; do
+    exists "$1" "$f" "$2"
+    r=$?
+    [ "$r" = 0 ] && return 0
+    [ "$r" = 2 ] && unknown=1
+  done
+  [ "$unknown" = 1 ] && return 2
+  return 1
+}
+
 # Templates this repository declined: listed in .github/baseline-skip on the default branch, or in
 # a PR from $BRANCH that was closed without merging. One path per line. Status 2: could not tell.
 declined() { # <repo> <ref>
@@ -166,6 +181,19 @@ workflows_step() { # <full> <private> <default branch> <empty>
       if [ "$r" = 2 ]; then
         fail "   共通のワークフロー: $dest があるか確かめられなかったので飛ばす"
         return
+      fi
+    fi
+    # dept.yml only where dept has a lockfile to read. Checked last, when it would go in; an empty
+    # repository has none yet, and a later run puts it in once there is one. If this cannot be told,
+    # leave dept.yml out this time rather than hold back the other templates.
+    if [ "$(basename "$t")" = dept.yml ]; then
+      [ "$empty" = true ] && continue
+      has_dept_lockfile "$full" "$default"
+      r=$?
+      [ "$r" = 1 ] && continue
+      if [ "$r" = 2 ]; then
+        fail "   共通のワークフロー: dept が読めるロックファイルがあるか確かめられなかったので、dept.yml は飛ばす"
+        continue
       fi
     fi
     files+=("$t")
@@ -228,7 +256,16 @@ workflows_step() { # <full> <private> <default branch> <empty>
     fail "   共通のワークフロー: ブランチを作れなかった"
     return
   fi
-  local body
+  local body dept_note=""
+  for t in "${files[@]}"; do
+    [ "$(basename "$t")" = dept.yml ] || continue
+    dept_note="
+- \`dept.yml\` は、依存の遅れのバッジとレポートを \`dept-badge\` ブランチに置きます。README には次の行を足します(非公開のリポジトリでも、読める人には表示されます)。
+
+  \`\`\`markdown
+  [![dept](https://github.com/$full/raw/dept-badge/dept.svg)](https://github.com/$full/blob/dept-badge/dept.md)
+  \`\`\`"
+  done
   body="shiroinock/workflows の \`templates/\` のうち、このリポジトリにまだ無いものを入れます(\`repo-baseline\` が出した PR です)。
 
 $(for t in "${files[@]}"; do echo "- \`$(dest_of "$(basename "$t")")\`"; done)
@@ -237,7 +274,7 @@ $(for t in "${files[@]}"; do echo "- \`$(dest_of "$(basename "$t")")\`"; done)
 - \`.github/workflows\` を変える PR なので、Claude のレビューは走りません。手で見てマージします。
 - 入れたくないものは、このブランチで消し、そのファイル名(\`templates/\` での名前、例 \`claude-fix-ci.yml\`)を \`.github/baseline-skip\` に1行ずつ書いてからマージします。書かないと、次の見回りでまた入れる PR が出ます。
 - この PR を閉じる(マージしない)と、ここにあるファイルはもう入れません。あとから共通に足されたテンプレートは、また PR で出ます。
-- このリポジトリに共通の設定を一切入れたくないときは、トピック \`$SKIP_TOPIC\` を付けます。"
+- このリポジトリに共通の設定を一切入れたくないときは、トピック \`$SKIP_TOPIC\` を付けます。$dept_note"
   if pr=$(gh pr create -R "$full" --head "$BRANCH" --base "$default" \
       --title "共通のワークフローを入れる" --body "$body" 2>/dev/null); then
     echo "   共通のワークフロー: 入れる PR を出した($names): $(show_url "$pr")"
