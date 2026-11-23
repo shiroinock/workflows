@@ -1,8 +1,9 @@
 # Scores how far the dependencies lag behind their latest releases and keeps the README badge
-# and its report up to date (public repositories only). In the README, link the badge to the report:
-#   [![dept](https://raw.githubusercontent.com/<owner>/<repo>/dept-badge/dept.svg)](https://github.com/<owner>/<repo>/blob/dept-badge/dept.md)
-# Not put in by repo-baseline (templates/optional/): copy it by hand into a public repository that has
-# a pnpm-lock.yaml or package-lock.json. The job lives in shiroinock/workflows; change it there, not here.
+# and its report up to date. In the README, link the badge to the report:
+#   [![dept](https://github.com/<owner>/<repo>/raw/dept-badge/dept.svg)](https://github.com/<owner>/<repo>/blob/dept-badge/dept.md)
+# (github.com/<owner>/<repo>/raw/... works in private repositories too, for those who can read them.)
+# repo-baseline puts it only into repositories with a pnpm-lock.yaml or package-lock.json at the root.
+# The job lives in shiroinock/workflows; change it there, not here.
 name: dept
 
 on:

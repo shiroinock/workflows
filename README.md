@@ -8,14 +8,14 @@ shiroinock のリポジトリで共通に使う GitHub Actions の再利用ワ�
 | `claude-review.yml` | 同じリポジトリのブランチから来た、下書きでない PR を Claude Code がレビューする。ボットの PR や push は `allowed_bots`(既定は Renovate と、CI の直しを push する Claude)に挙げたものだけ。直す指摘が無ければラベル「マージ予約」を付ける。検査 `review / verdict` は、指摘が残っている間は落ちる(必須の検査にする)。直さなくてもマージできるが直す価値のある小さい指摘は、マージを止めずに issue「あとで直す」へ PR ごとにまとめる(`collect_nits: false` で止める。呼ぶ側は `issues: write` を渡す) |
 | `claude-fix-ci.yml` | PR の CI が落ちたら、Claude Code が原因を読んで枝を直し、push する(CI とレビューが走り直す)。人が直すべきもの、または決めた回数(既定 2 回)で直らないものは、PR で持ち主にメンションし、ラベル「人の手が要る」を付けて止まる。下書きとボットの PR には手を出さない。すべてのワークフローの完了を受け、PR で落ちた実行だけを拾うので、CI の名前を合わせる必要は無い(CI が無ければ何もしない)。Claude のレビュー・アクションの固定・共通の静的ルールは飛ばす(静的ルールは手元の pre-push フックか `rules -- --fix` で直す)。ほかに飛ばしたいものは `skip_workflows` にファイル名を渡す |
 | `merge-reservation.yml` | 「マージ予約」の付いた PR が既定ブランチに向いたら、自動マージ(マージコミット)を入れる。積み重ねた PR は、下の PR がマージされて付け替わるまで待つ |
-| `dept.yml` | [dept](https://github.com/shiroinock/dept) で依存の遅れ(最新版までに出たリリースを major 30 / minor 3 / patch 1 で重み付けした合計)を数え、README に貼るバッジ `dept.svg`、どの依存がどれだけ遅れているかのレポート `dept.md`、結果 `dept.json` をブランチ `dept-badge` に置く。バッジは dept が自分で描き、外部のサービスは使わない。dept はリリースから取り、来歴の attestation を確かめてから使う。調べられなかった依存があれば、前のバッジを上書きせずに失敗する(`allow_errors: true` で置く)。`repo-baseline` では入れない。対応している公開リポジトリ(ルートに `pnpm-lock.yaml` か `package-lock.json`)に、`templates/optional/dept.yml` を手で置く。README には `[![dept](https://raw.githubusercontent.com/<owner>/<repo>/dept-badge/dept.svg)](https://github.com/<owner>/<repo>/blob/dept-badge/dept.md)` と書き、クリックでレポートが開くようにする(公開リポジトリ向け) |
+| `dept.yml` | [dept](https://github.com/shiroinock/dept) で依存の遅れ(最新版までに出たリリースを major 30 / minor 3 / patch 1 で重み付けした合計)を数え、README に貼るバッジ `dept.svg`、どの依存がどれだけ遅れているかのレポート `dept.md`、結果 `dept.json` をブランチ `dept-badge` に置く。バッジは dept が自分で描き、外部のサービスは使わない。dept はリリースから取り、来歴の attestation を確かめてから使う。調べられなかった依存があれば、前のバッジを上書きせずに失敗する(`allow_errors: true` で置く)。`repo-baseline` は、ルートに `pnpm-lock.yaml` か `package-lock.json` があるリポジトリにだけ入れる(公開・非公開を問わない)。README には `[![dept](https://github.com/<owner>/<repo>/raw/dept-badge/dept.svg)](https://github.com/<owner>/<repo>/blob/dept-badge/dept.md)` と書き、クリックでレポートが開くようにする。`github.com/…/raw/…` の形なら、非公開のリポジトリでも読める人には表示される(`raw.githubusercontent.com` は非公開では表示されない) |
 | `static-rules.yml` | 共通の静的ルール(`static-rules/` の ast-grep のルール)に引っかかるコードのある PR を落とす(`rules / rules`)。push はしない。手元で `nix run github:shiroinock/workflows#rules -- --fix` を流すと直せるものは直る。外したいルールは `.github/static-rules-off` に書く |
 
 ## 入れ方
 
 ふつうは手で置かず、`repo-baseline` で入れる(次の節)。下は、手で入れるときの手順と、入れたあとに要るもの。
 
-1. `templates/` のファイルを、呼ぶ側のリポジトリの `.github/workflows/` に置く。`templates/optional/` のもの(`dept.yml`)は、合うリポジトリにだけ置く。
+1. `templates/` のファイルを、呼ぶ側のリポジトリの `.github/workflows/` に置く。`dept.yml` は、ルートに `pnpm-lock.yaml` か `package-lock.json` があるリポジトリにだけ置く。
    - 非公開のリポジトリでは、`merge-reservation.yml` の `schedule` を消す(10分ごとの実行が Actions の無料枠を食うため)。
    - 既定ブランチの CI を、GITHUB_TOKEN のマージのあとで走らせ直したいときは、`ci_workflow` に CI のファイル名を渡す。その CI は `workflow_dispatch` を受け付けること。
    - リポジトリ固有のレビュー観点は `review_focus` に箇条書きで渡す。
@@ -35,7 +35,7 @@ nix run github:shiroinock/workflows#repo-baseline -- <名前> ...           # �
 
 dotfiles では `repo-new`・`repo-baseline` という名前で入っている。`repo-baseline` は何度流してもよく、次を入れる。
 
-- `templates/` の直下のうち、まだ無いもの(Renovate の設定を含む。`templates/optional/` は入れない)。あるものは書き換えない。空のリポジトリには最初のコミットとして入れ、中身のあるリポジトリには PR を出す(`.github/workflows` を変えるので、手で見てマージする)。非公開のリポジトリでは、`merge-reservation.yml` の schedule を外す。
+- `templates/` のうち、まだ無いもの(Renovate の設定を含む。`dept.yml` は、ルートに `pnpm-lock.yaml` か `package-lock.json` があるリポジトリにだけ)。あるものは書き換えない。空のリポジトリには最初のコミットとして入れ、中身のあるリポジトリには PR を出す(`.github/workflows` を変えるので、手で見てマージする)。非公開のリポジトリでは、`merge-reservation.yml` の schedule を外す。
   - 要らないテンプレートは、リポジトリの `.github/baseline-skip` に `templates/` でのファイル名を1行ずつ書く。入れる PR を閉じた(マージしなかった)ときも、その PR のファイルはもう入れない。
   - API のエラーは「無い」「空」とみなさず、その手順を飛ばす。失敗が1つでもあれば 1 で終わる。
 - シークレット `CLAUDE_CODE_OAUTH_TOKEN`:無ければ 1Password から入れる(手元で `op` が使えるときだけ。参照は `CLAUDE_TOKEN_OP_REF` で替えられる)。
