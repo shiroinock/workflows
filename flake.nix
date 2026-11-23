@@ -53,7 +53,7 @@
           text = ''
             export HOME="''${TMPDIR:-/tmp}"
             echo "== actionlint (with shellcheck)"
-            actionlint .github/workflows/*.yml templates/*.yml
+            actionlint .github/workflows/*.yml templates/*.yml templates/optional/*.yml
             echo "== zizmor"
             zizmor --offline --no-progress .github/workflows templates
             echo "== pinact: actions pinned to a commit"
