@@ -34,26 +34,24 @@ shiroinock のリポジトリで揃えるツールと版。新しく作るリポ
 
 ### 古い実行を止める
 
-PR の CI には `concurrency` を付け、同じ PR に新しく push したら古い実行を取り消す。main への push は取り消さない(最後まで走らせてキャッシュや結果を残す)。
+PR の CI には `concurrency` を付け、同じ PR に新しく push したら古い実行を取り消す。main への push は取り消さない(最後まで走らせてキャッシュや結果を残す)。PR でないときは `run_id` で group を実行ごとに分ける(同じ group だと、待っている実行が新しい実行に取り消されるため)。
 
 ```yaml
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 ```
 
-### キャッシュポイズニングの対策
+### キャッシュの読み書き
 
-PR のコードが書いたキャッシュを、あとで既定ブランチやリリースの実行が読むと、PR のコードを信頼する実行に持ち込める。だから書けるのは既定ブランチだけにする。
+Actions のキャッシュはブランチの範囲で分かれている。`pull_request` の実行が書いたキャッシュは `refs/pull/<N>/merge` の範囲に入り、同じ PR の実行からしか読めない。既定ブランチの範囲のキャッシュは、どのブランチ・PR・タグの実行からも読める。
 
-- **書くのは既定ブランチだけ**:キャッシュに書くのは、既定ブランチへの push・schedule・既定ブランチでの workflow_dispatch だけ。PR の実行は `actions/cache/restore` で読むだけにする。
-  - PR で `actions/cache` を使わない(終わりに書いてしまう)。
-  - setup-node・setup-python などの組み込みのキャッシュ(`cache:`)は、PR で書いてしまう。使わずに `actions/cache/restore` と `actions/cache/save` に分けるか、PR では切る。
-- **キーは固定の値だけ**:キーはロックファイルのハッシュ(`hashFiles('pnpm-lock.yaml')` など)と OS(`runner.os`)などの固定の値で作る。ブランチ名・PR のタイトル・コミットメッセージなど、外から決められる値は入れない。
-- **成果物はまっさらにビルドする**:リリース・デプロイ・npm などへの公開の成果物を作るジョブは、キャッシュを読まない。
-- **権限の強い起動条件とは混ぜない**:`pull_request_target`・`workflow_run` などで動くジョブで、PR のコードとキャッシュを一緒に扱わない(PR のコードをチェックアウトしない、キャッシュを読み書きしない)。
-- **Docker のレイヤー**:`docker/build-push-action` の `cache-from: type=gha` は読んでよい。`cache-to` は既定ブランチの実行だけに付け、PR では付けない。
-- **Nix**:ビルドの結果を Actions のキャッシュで使い回すなら、同じく既定ブランチだけが書く。PR は読むだけにする。
+**書くのは既定ブランチだけ(コストの決まり)**:PR の実行が書いたキャッシュは、ほかから使われないまま、リポジトリの枠(10 GB)を食い、既定ブランチのキャッシュを追い出す。だからキャッシュに書くのは、既定ブランチへの push・schedule・既定ブランチでの workflow_dispatch だけにし、PR の実行は読むだけにする。
+
+- PR で `actions/cache` を使わない(終わりに書いてしまう)。`actions/cache/restore` と、既定ブランチだけで動く `actions/cache/save` に分ける。
+- setup-node・setup-python などの組み込みのキャッシュ(`cache:`)も PR で書く。同じく `restore` と `save` に分けるか、使わない。
+- Docker の `cache-from: type=gha` は読んでよい。`cache-to` は既定ブランチの実行だけに付ける。
+- Nix のビルドの結果を Actions のキャッシュで使い回すときも、書くのは既定ブランチだけ。
 
 読むだけと書くのを分ける形の例(pnpm の store):
 
@@ -82,7 +80,15 @@ Docker の例:
     cache-to: ${{ github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'type=gha,mode=max' || '' }}
 ```
 
+### キャッシュポイズニングの対策
+
+危ないのは、既定ブランチの範囲で動きながら外から来たコードや値を扱う実行が、キャッシュに書くこと。そこに書かれたものは、既定ブランチの CI もリリースも読む。
+
+- **権限の強い起動条件とは混ぜない**:`pull_request_target`・`workflow_run`・`issue_comment` などで動くジョブは既定ブランチの範囲で動く。そこで PR のコードを動かすジョブはキャッシュを読み書きしない。キャッシュを使うジョブでは PR のコードを動かさない。
+- **キーは固定の値だけ**:キーはロックファイルのハッシュ(`hashFiles('pnpm-lock.yaml')` など)と OS(`runner.os`)などの固定の値で作る。ブランチ名・PR のタイトル・コミットメッセージなど、外から決められる値は入れない。
+- **成果物はまっさらにビルドする**:リリース・デプロイ・npm などへの公開の成果物を作るジョブは、キャッシュを読まない。既定ブランチのキャッシュが汚れていても(依存が乗っ取られた CI が書いた、など)、成果物に入らないようにする。
+
 ### 確かめ方
 
 - `zizmor` を流し、`cache-poisoning` の指摘が出ないこと(このリポジトリなら `nix run .`、ほかのリポジトリなら `nix run nixpkgs#zizmor -- .github/workflows`)。
-- zizmor が見るのは主に、リリースや公開のワークフローでキャッシュを使っていないか。PR で書いていないか・キーに外の値が入っていないかは、上の決まりで目で確かめる。
+- zizmor が見るのは主に、リリースや公開のワークフローでキャッシュを使っていないか。権限の強い起動条件で PR のコードとキャッシュを混ぜていないか、キーに外の値が入っていないか、PR で書いていないか(コストの決まり)は、上の決まりで目で確かめる。
