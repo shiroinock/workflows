@@ -26,12 +26,13 @@ permissions: {}
 jobs:
   dept:
     # branches: [main] matches the head branch name only, and a fork's PR branch can be called main
-    # too, so take only CI that passed on this repository's main (a push or the dispatch above).
+    # too, so take only CI that passed on this repository's main. Only the reservation's dispatch: a
+    # person's merge already ran this through push.
     if: >-
       github.event_name != 'workflow_run' ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_repository.full_name == github.repository &&
-       (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch'))
+       github.event.workflow_run.event == 'workflow_dispatch')
     uses: shiroinock/workflows/.github/workflows/dept.yml@main
     permissions:
       contents: write # push the badge branch

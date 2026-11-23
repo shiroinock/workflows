@@ -169,17 +169,6 @@ workflows_step() { # <full> <private> <default branch> <empty>
   for t in "$TEMPLATES_DIR"/*; do
     dest=$(dest_of "$(basename "$t")")
     [ -n "$dest" ] || continue
-    # An empty repository has no lockfile yet; a later run puts it in once there is one.
-    if [ "$(basename "$t")" = dept.yml ]; then
-      [ "$empty" = true ] && continue
-      has_dept_lockfile "$full" "$default"
-      r=$?
-      [ "$r" = 1 ] && continue
-      if [ "$r" = 2 ]; then
-        fail "   共通のワークフロー: dept が読めるロックファイルがあるか確かめられなかったので飛ばす"
-        return
-      fi
-    fi
     if [ "$empty" = false ]; then
       grep -qxF "$dest" <<<"$skip" && continue
       if [ "$dest" = renovate.json ]; then
@@ -192,6 +181,19 @@ workflows_step() { # <full> <private> <default branch> <empty>
       if [ "$r" = 2 ]; then
         fail "   共通のワークフロー: $dest があるか確かめられなかったので飛ばす"
         return
+      fi
+    fi
+    # dept.yml only where dept has a lockfile to read. Checked last, when it would go in; an empty
+    # repository has none yet, and a later run puts it in once there is one. If this cannot be told,
+    # leave dept.yml out this time rather than hold back the other templates.
+    if [ "$(basename "$t")" = dept.yml ]; then
+      [ "$empty" = true ] && continue
+      has_dept_lockfile "$full" "$default"
+      r=$?
+      [ "$r" = 1 ] && continue
+      if [ "$r" = 2 ]; then
+        fail "   共通のワークフロー: dept が読めるロックファイルがあるか確かめられなかったので、dept.yml は飛ばす"
+        continue
       fi
     fi
     files+=("$t")
