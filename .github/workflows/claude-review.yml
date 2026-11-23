@@ -3,8 +3,12 @@
 # the PR points at the default branch. Claude only reads and comments; the label is added by a later
 # job that reads Claude's structured verdict, so the Claude job never holds a token that can label
 # or merge. The verdict job fails while findings remain; make "review / verdict" a required check
-# so such a PR cannot be merged. Minor findings worth fixing later never block; the nits job
+# so such a PR cannot be merged. Minor findings worth fixing later never block; the verdict job
 # collects them in one issue labelled あとで直す. Call it from templates/claude-code-review.yml.
+#
+# Two jobs per push: Claude's read-only review, and one verdict job that does everything with write
+# access (the label, auto-merge, the あとで直す issue, the notes). Every job is billed at least a
+# minute in a private repository, so the small steps share one job instead of one job each.
 name: Claude のレビュー
 
 on:
@@ -37,80 +41,13 @@ on:
 permissions: {}
 
 jobs:
-  # A push after the label must not ride on the earlier review: take the reservation back first,
-  # and let the review below put it back. The PR's code is never checked out here.
-  # The labels are read now, not from the event: the run before this one may have added the label
-  # after this push was made, and the event would not show it.
-  unreserve:
+  review:
+    # Same-repository branches only (only people who can push there), and not drafts: a draft PR is
+    # opened at the start of the work, and is reviewed once it is marked ready.
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
       !github.event.pull_request.draft
     # A new push cancels the review of the commits before it.
-    concurrency:
-      group: claude-unreserve-${{ github.event.pull_request.number }}
-      cancel-in-progress: true
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: write # turn off auto-merge
-      pull-requests: write # remove the label
-    steps:
-      - name: ラベル「マージ予約」と自動マージを外す
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
-        run: |
-          if gh pr view "$PR" --json labels --jq '.labels[].name' | grep -qx マージ予約; then
-            gh pr edit "$PR" --remove-label マージ予約
-            gh pr merge "$PR" --disable-auto || echo "自動マージは入っていない"
-          else
-            echo "ラベル「マージ予約」は付いていない"
-          fi
-
-      # The code under Claude's earlier comments has changed; close those threads so only the new
-      # review's comments stay open. Only threads Claude started are touched.
-      - name: 古くなった Claude の指摘を解決済みにする
-        if: github.event.action == 'synchronize'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          OWNER: ${{ github.repository_owner }}
-          REPO: ${{ github.event.repository.name }}
-          PR: ${{ github.event.pull_request.number }}
-        run: |
-          # The single quotes keep the GraphQL variables ($owner and the rest) away from the shell.
-          # shellcheck disable=SC2016
-          ids=$(gh api graphql -F owner="$OWNER" -F repo="$REPO" -F number="$PR" -f query='
-            query($owner: String!, $repo: String!, $number: Int!) {
-              repository(owner: $owner, name: $repo) {
-                pullRequest(number: $number) {
-                  reviewThreads(first: 100) {
-                    nodes { id isResolved isOutdated comments(first: 1) { nodes { author { login } } } }
-                  }
-                }
-              }
-            }' --jq '.data.repository.pullRequest.reviewThreads.nodes[]
-              | select(.isOutdated and (.isResolved | not) and .comments.nodes[0].author.login == "claude")
-              | .id')
-          if [ -z "$ids" ]; then
-            echo "解決済みにする指摘は無い"
-            exit 0
-          fi
-          for id in $ids; do
-            # shellcheck disable=SC2016
-            gh api graphql -F id="$id" -f query='
-              mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }' \
-              --silent || echo "::warning::$id を解決済みにできなかった"
-          done
-
-  review:
-    needs: unreserve
-    # Same-repository branches only (only people who can push there), and not drafts: a draft PR is
-    # opened at the start of the work, and is reviewed once it is marked ready.
-    if: >-
-      !cancelled() && needs.unreserve.result != 'failure' &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      !github.event.pull_request.draft
     concurrency:
       group: claude-review-${{ github.event.pull_request.number }}
       cancel-in-progress: true
@@ -195,55 +132,30 @@ jobs:
           echo "::error::Claude のレビューが走らなかった。上の「Claude Code でレビューする」のログを見る。向き先の枝の workflow が既定の枝と違うときは、向き先に既定の枝を取り込んで push し直す"
           exit 1
 
-  # Labels the PR only when Claude finished and found nothing to fix. Claude's text never reaches
-  # a shell here; only the verdict is compared, in an expression.
-  reserve:
-    needs: review
-    if: >-
-      !cancelled() && needs.review.result == 'success' && needs.review.outputs.result != '' &&
-      fromJSON(needs.review.outputs.result).verdict == 'clean' &&
-      fromJSON(needs.review.outputs.result).findings == 0
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      pull-requests: write # add the label
-      actions: write # start マージ予約; a label added with GITHUB_TOKEN sends no event
-    steps:
-      - name: ラベル「マージ予約」を付ける
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
-          REVIEWED: ${{ github.event.pull_request.head.sha }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          # A push during the review: the newer run reviews it and decides.
-          head=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
-          if [ "$head" != "$REVIEWED" ]; then
-            echo "レビューのあとに push があった($REVIEWED → $head)。ラベルは付けない"
-            exit 0
-          fi
-          gh label create マージ予約 --color 0e8a16 \
-            --description "レビュー済み。向き先が main になったら自動マージを入れる" 2>/dev/null || true
-          gh pr edit "$PR" --add-label マージ予約
-          # shiroinock/workflows itself has no マージ予約 caller (its merge-reservation.yml is the
-          # shared one, which takes no workflow_dispatch); such a PR keeps the label and is merged by hand.
-          gh workflow run merge-reservation.yml --ref "$DEFAULT_BRANCH" ||
-            echo "::warning::マージ予約の workflow を起動できなかった(templates/merge-reservation.yml を置いていない?)。自動マージは入らないので、手でマージする"
-
-  # The check to make required: it passes only when Claude reviewed this push and found nothing to
-  # fix, so a PR with findings cannot be merged, by hand or otherwise. The review job itself ends
-  # with success even when it leaves findings. A PR that changes .github/workflows passes, since
-  # Claude cannot review it (see above) and it is merged by hand after a person reads it. A draft,
-  # a fork's PR, or a review that did not finish fails. Only the verdict and the count are read.
+  # Everything that needs write access, after the review: Claude's text never reaches a shell here
+  # (only the verdict and the count are compared; the nits are turned into Markdown by jq).
+  #
+  # It is also the check to make required: it passes only when Claude reviewed this push and found
+  # nothing to fix, so a PR with findings cannot be merged, by hand or otherwise. The review job
+  # itself ends with success even when it leaves findings. A PR that changes .github/workflows
+  # passes, since Claude cannot review it (see above) and it is merged by hand after a person reads
+  # it. A draft, a fork's PR, or a review that did not finish fails.
+  #
+  # The label from an earlier review is taken back here, at the end, not before the review: while
+  # this run is going, this required check is pending on the new head, so auto-merge waits for it.
   verdict:
     needs: review
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions: {}
+    timeout-minutes: 10
+    permissions:
+      contents: write # turn off auto-merge
+      pull-requests: write # the label, the comments, resolving Claude's old threads
+      issues: write # the あとで直す issue and its label
+      actions: write # start マージ予約; a label added with GITHUB_TOKEN sends no event
     steps:
-      - name: レビューの指摘が無いか確かめる
+      - name: レビューの結果を読む
+        id: decide
         env:
           RESULT: ${{ needs.review.result }}
           SKIPPED: ${{ needs.review.outputs.skipped }}
@@ -254,40 +166,99 @@ jobs:
           VERDICT=$(jq -r '.verdict // ""' <<<"${REVIEW:-null}" 2>/dev/null || true)
           FINDINGS=$(jq -r '.findings // ""' <<<"${REVIEW:-null}" 2>/dev/null || true)
           if [ "$RESULT" = success ] && [ "$VERDICT" = clean ] && [ "$FINDINGS" = 0 ]; then
-            echo "Claude のレビューで、直す指摘は無かった"
-            exit 0
-          fi
-          if [ "$RESULT" = success ] && [ "$SKIPPED" = workflow_change ]; then
-            echo "::notice::.github/workflows を変える PR なので、Claude はレビューできない。手で見てマージする"
-            exit 0
-          fi
-          if [ "$DRAFT" = true ]; then
-            echo "::error::下書きの PR はレビューしない。レビューできる状態にすると、レビューが走る"
+            outcome=clean
+          elif [ "$RESULT" = success ] && [ "$SKIPPED" = workflow_change ]; then
+            outcome=workflow_change
+          elif [ "$DRAFT" = true ]; then
+            outcome=draft
           elif [ "$RESULT" != success ]; then
-            echo "::error::Claude のレビューが終わらなかった($RESULT)。「review」のログを見る"
+            outcome=unfinished
           else
-            echo "::error::Claude のレビューに直す指摘がある($FINDINGS 件)。PR のコメントを見て直し、push するともう一度レビューされる"
+            outcome=findings
           fi
-          exit 1
+          echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
+          echo "findings=$FINDINGS" >> "$GITHUB_OUTPUT"
 
-  # Collects the minor findings worth fixing later in one issue (label あとで直す), one comment per
-  # PR, replaced by each new review of that PR. They never block the merge. Claude's text reaches
-  # the issue only as Markdown built by jq; nothing of it becomes code. Runs one at a time per
-  # repository, so two PRs cannot both create the issue.
-  nits:
-    needs: review
-    if: >-
-      !cancelled() && inputs.collect_nits && needs.review.result == 'success' &&
-      needs.review.outputs.result != ''
-    concurrency:
-      group: claude-review-nits-${{ github.repository }}
-      cancel-in-progress: false
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      issues: write # create the issue and the label, write the PR's comment
-    steps:
+      # The label follows this review only while the PR's head is still the commit it read; after a
+      # newer push, that push's run decides. Labels are read now, not from the event: the run before
+      # this one may have added the label after this push was made.
+      - name: ラベル「マージ予約」を付ける・外す
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          REVIEWED: ${{ github.event.pull_request.head.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          OUTCOME: ${{ steps.decide.outputs.outcome }}
+        run: |
+          head=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
+          if [ "$head" != "$REVIEWED" ]; then
+            echo "レビューのあとに push があった($REVIEWED → $head)。ラベルはその push のレビューが決める"
+            exit 0
+          fi
+          labelled=$(gh pr view "$PR" --json labels --jq '.labels[].name' | grep -cx マージ予約 || true)
+          if [ "$OUTCOME" = clean ]; then
+            if [ "$labelled" != 0 ]; then
+              echo "ラベル「マージ予約」はもう付いている"
+            else
+              gh label create マージ予約 --color 0e8a16 \
+                --description "レビュー済み。向き先が main になったら自動マージを入れる" 2>/dev/null || true
+              gh pr edit "$PR" --add-label マージ予約
+            fi
+            # shiroinock/workflows itself has no マージ予約 caller (its merge-reservation.yml is the
+            # shared one, which takes no workflow_dispatch); such a PR keeps the label and is merged by hand.
+            gh workflow run merge-reservation.yml --ref "$DEFAULT_BRANCH" ||
+              echo "::warning::マージ予約の workflow を起動できなかった(templates/merge-reservation.yml を置いていない?)。自動マージは入らないので、手でマージする"
+          elif [ "$labelled" != 0 ]; then
+            gh pr edit "$PR" --remove-label マージ予約
+            gh pr merge "$PR" --disable-auto || echo "自動マージは入っていない"
+          else
+            echo "ラベル「マージ予約」は付いていない"
+          fi
+
+      # The code under Claude's earlier comments has changed; close those threads so only the new
+      # review's comments stay open. Only threads Claude started are touched.
+      - name: 古くなった Claude の指摘を解決済みにする
+        if: github.event.action == 'synchronize'
+        continue-on-error: true # a note; it must not fail the verdict
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          # The single quotes keep the GraphQL variables ($owner and the rest) away from the shell.
+          # shellcheck disable=SC2016
+          ids=$(gh api graphql -F owner="$OWNER" -F repo="$REPO" -F number="$PR" -f query='
+            query($owner: String!, $repo: String!, $number: Int!) {
+              repository(owner: $owner, name: $repo) {
+                pullRequest(number: $number) {
+                  reviewThreads(first: 100) {
+                    nodes { id isResolved isOutdated comments(first: 1) { nodes { author { login } } } }
+                  }
+                }
+              }
+            }' --jq '.data.repository.pullRequest.reviewThreads.nodes[]
+              | select(.isOutdated and (.isResolved | not) and .comments.nodes[0].author.login == "claude")
+              | .id')
+          if [ -z "$ids" ]; then
+            echo "解決済みにする指摘は無い"
+            exit 0
+          fi
+          for id in $ids; do
+            # shellcheck disable=SC2016
+            gh api graphql -F id="$id" -f query='
+              mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }' \
+              --silent || echo "::warning::$id を解決済みにできなかった"
+          done
+
+      # Collects the minor findings worth fixing later in one issue (label あとで直す), one comment per
+      # PR, replaced by each new review of that PR. They never block the merge. Two PRs reviewed at
+      # the same moment in a repository with no open あとで直す issue may both open one.
       - name: 小さい指摘を issue「あとで直す」に書く
+        if: inputs.collect_nits && needs.review.result == 'success' && needs.review.outputs.result != ''
+        continue-on-error: true # minor findings never block
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -342,18 +313,10 @@ jobs:
             echo "小さい指摘は無い"
           fi
 
-  # Leaves one comment on a PR whose review could not run because it changes .github/workflows.
-  explain:
-    needs: review
-    if: >-
-      !cancelled() && needs.review.result == 'success' &&
-      needs.review.outputs.skipped == 'workflow_change'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      pull-requests: write # comment
-    steps:
+      # Leaves one comment on a PR whose review could not run because it changes .github/workflows.
       - name: レビューが走らない理由を PR に書く
+        if: steps.decide.outputs.outcome == 'workflow_change'
+        continue-on-error: true # a note; the check below still passes
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -369,3 +332,18 @@ jobs:
 
           - 手で差分を見て、手でマージしてください（GITHUB_TOKEN では workflow を変える PR をマージできないので、ラベル「マージ予約」も付きません）。
           - 積み重ねた PR で、向き先の枝が古い workflow を持っているだけなら、向き先に既定の枝を取り込んで push し直すと、レビューが走ります。"
+
+      - name: レビューの指摘が無いか確かめる
+        env:
+          OUTCOME: ${{ steps.decide.outputs.outcome }}
+          FINDINGS: ${{ steps.decide.outputs.findings }}
+          RESULT: ${{ needs.review.result }}
+        run: |
+          case "$OUTCOME" in
+            clean) echo "Claude のレビューで、直す指摘は無かった"; exit 0 ;;
+            workflow_change) echo "::notice::.github/workflows を変える PR なので、Claude はレビューできない。手で見てマージする"; exit 0 ;;
+            draft) echo "::error::下書きの PR はレビューしない。レビューできる状態にすると、レビューが走る" ;;
+            unfinished) echo "::error::Claude のレビューが終わらなかった($RESULT)。「review」のログを見る" ;;
+            *) echo "::error::Claude のレビューに直す指摘がある($FINDINGS 件)。PR のコメントを見て直し、push するともう一度レビューされる" ;;
+          esac
+          exit 1
