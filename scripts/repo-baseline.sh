@@ -265,7 +265,10 @@ workflows_step() { # <full> <private> <default branch> <empty>
     cp "$work/updated/$dest" "$work/want/$dest"
   done
   local wanted
-  wanted=$(cd "$work/want" && find . -type f | sed 's|^\./||' | sort)
+  wanted=$({
+    for t in "${files[@]}"; do dest_of "$(basename "$t")"; done
+    printf '%s\n' "${updated[@]}"
+  } | grep . | sort -u)
 
   if [ -n "$pr" ]; then
     # The open PR is made again on the current default branch, so it carries what the templates are
