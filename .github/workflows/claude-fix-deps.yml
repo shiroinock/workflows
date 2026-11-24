@@ -57,9 +57,10 @@ jobs:
   # workflow of a dependency PR finishes here) are only the runs that cannot be that last one:
   # - cancelled (a newer push replaced it; that push's runs decide) and skipped (it ends at once);
   # - a success of the shared checks that take seconds (pinact.yml with the shared static rules,
-  #   the former static-rules.yml, nix-hashes.yml): the CI and the review finish after them. If
-  #   one of them ever does finish last after a failure, that commit is not taken here; the next
-  #   push or a re-run of a check takes it.
+  #   the former static-rules.yml): the CI and the review finish after them. If one of them ever
+  #   does finish last after a failure, that commit is not taken here; the next push or a re-run
+  #   of a check takes it. nix-hashes.yml is not one of them: it fetches every fixed output, and
+  #   builds by default, so it often finishes last.
   triage:
     if: >-
       github.event.workflow_run.event == 'pull_request' &&
@@ -69,8 +70,7 @@ jobs:
       github.event.workflow_run.conclusion != 'skipped' &&
       !(github.event.workflow_run.conclusion == 'success' && (
         contains(github.event.workflow_run.path, '/pinact.yml') ||
-        contains(github.event.workflow_run.path, '/static-rules.yml') ||
-        contains(github.event.workflow_run.path, '/nix-hashes.yml')))
+        contains(github.event.workflow_run.path, '/static-rules.yml')))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
