@@ -50,11 +50,22 @@ permissions: {}
 jobs:
   # Finds the PR the finished run belongs to, and decides whether to try. Nothing from the branch
   # runs here.
+  #
+  # The decision is made when the last check of the commit finishes, and that one may succeed
+  # after another failed, so a finished run is not left out for succeeding: which check finishes
+  # last depends on the PR (the review ends at once on a PR that changes .github/workflows, such
+  # as an action digest update, and pinact.yml installs Nix). Left out before the job starts (a
+  # private repository bills every job started as at least a minute) are only the runs that
+  # cannot be that last one: cancelled (a newer push replaced it, and that push's runs decide)
+  # and skipped (it ends at once). A run cancelled by its timeout is left out too; re-running a
+  # check takes that commit.
   triage:
     if: >-
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
-      startsWith(github.event.workflow_run.head_branch, inputs.branch_prefix)
+      startsWith(github.event.workflow_run.head_branch, inputs.branch_prefix) &&
+      github.event.workflow_run.conclusion != 'cancelled' &&
+      github.event.workflow_run.conclusion != 'skipped'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
