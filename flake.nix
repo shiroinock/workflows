@@ -111,7 +111,7 @@
         apps.repo-new = flake-utils.lib.mkApp { drv = repo-new; };
         # Called by .github/workflows/pinact.yml in other repositories, at the version locked here.
         packages.pinact = pkgs.pinact;
-        # Called by .github/workflows/static-rules.yml in other repositories, and locally.
+        # Called by .github/workflows/pinact.yml in other repositories, and locally.
         packages.rules = rules;
         apps.rules = flake-utils.lib.mkApp { drv = rules; };
         apps.default = flake-utils.lib.mkApp { drv = lint; };

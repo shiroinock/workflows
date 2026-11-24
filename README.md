@@ -9,7 +9,8 @@ shiroinock のリポジトリで共通に使う GitHub Actions の再利用ワ�
 | `claude-fix-ci.yml` | PR の CI が落ちたら、Claude Code が原因を読んで枝を直し、push する(CI とレビューが走り直す)。人が直すべきもの、または決めた回数(既定 2 回)で直らないものは、PR で持ち主にメンションし、ラベル「人の手が要る」を付けて止まる。下書きとボットの PR には手を出さない。すべてのワークフローの完了を受け、PR で落ちた実行だけを拾うので、CI の名前を合わせる必要は無い(CI が無ければ何もしない)。Claude のレビュー・アクションの固定・共通の静的ルールは飛ばす(静的ルールは手元の pre-push フックか `rules -- --fix` で直す)。ほかに飛ばしたいものは `skip_workflows` にファイル名を渡す |
 | `merge-reservation.yml` | 「マージ予約」の付いた PR が既定ブランチに向いたら、自動マージ(マージコミット)を入れる。積み重ねた PR は、下の PR がマージされて付け替わるまで待つ |
 | `dept.yml` | [dept](https://github.com/shiroinock/dept) で依存の遅れ(最新版までに出たリリースを major 30 / minor 3 / patch 1 で重み付けした合計)を数え、README に貼るバッジ `dept.svg`、どの依存がどれだけ遅れているかのレポート `dept.md`、結果 `dept.json` をブランチ `dept-badge` に置く。バッジは dept が自分で描き、外部のサービスは使わない。dept はリリースから取り、来歴の attestation を確かめてから使う。調べられなかった依存があれば、前のバッジを上書きせずに失敗する(`allow_errors: true` で置く)。main への push、毎週月曜、手動で走る。マージ予約(GITHUB_TOKEN)のマージは push を出さないので、`merge-reservation.yml` に `ci_workflow` を渡しているリポジトリでは、そのあと dispatch される CI が成功したときにも走る(CI の `name:` が `CI` であること)。`repo-baseline` は、ルートに `pnpm-lock.yaml` か `package-lock.json` があるリポジトリにだけ入れる(公開・非公開を問わない)。README には `[![dept](https://github.com/<owner>/<repo>/raw/dept-badge/dept.svg)](https://github.com/<owner>/<repo>/blob/dept-badge/dept.md)` と書き、クリックでレポートが開くようにする。`github.com/…/raw/…` の形なら、非公開のリポジトリでも読める人には表示される(`raw.githubusercontent.com` は非公開では表示されない) |
-| `static-rules.yml` | 共通の静的ルール(`static-rules/` の ast-grep のルール)に引っかかるコードのある PR を落とす(`rules / rules`)。push はしない。手元で `nix run github:shiroinock/workflows#rules -- --fix` を流すと直せるものは直る。外したいルールは `.github/static-rules-off` に書く |
+| `pinact.yml` | 1つのジョブで2つを確かめ、引っかかる PR を落とす(`pinact / pinact`。必須の検査にする)。(1) アクションを SHA で固定していないもの(pinact)。(2) 共通の静的ルール(`static-rules/` の ast-grep のルール)に引っかかるコード。push はしない。手元で `pinact run` と `nix run github:shiroinock/workflows#rules -- --fix` を流すと直る。外したい静的ルールは `.github/static-rules-off` に書く。どちらも数秒で終わるので、非公開のリポジトリで1ジョブ1分と数えられる分を1つで済ませる |
+| `static-rules.yml` | 使わない。静的ルールは `pinact.yml` のジョブで流す。まだ呼んでいるリポジトリが壊れないよう残してあり、ジョブは飛ばす(飛ばしたジョブは数えられない)。呼ぶ側の `.github/workflows/static-rules.yml` は消してよい。`pinact.yml` を呼ばないリポジトリでは `standalone: true` を渡すと、これまでどおりここで流す |
 
 ## 入れ方
 
@@ -22,7 +23,7 @@ shiroinock のリポジトリで共通に使う GitHub Actions の再利用ワ�
    - 公開リポジトリなど、共通側の変更をすぐには受けたくないときは、`uses:` の `@main` を確かめたコミットの SHA に替える。`merge-reservation.yml` は `scripts/` を別に取ってくるので、`workflows_ref` にも同じ SHA を渡す(渡さないと main の `scripts/` が動く)。SHA で固定した参照は、共通の Renovate 設定を読んでいれば、main が進むたびに Renovate が PR で上げ、必須の検査が通れば Renovate が自動でマージする(Claude のレビューは workflow を変える PR では走らず、通った扱いになる)。
 2. シークレット `CLAUDE_CODE_OAUTH_TOKEN` を登録する(`claude setup-token` で発行したもの)。
 3. [Claude の GitHub App](https://github.com/apps/claude) をそのリポジトリに入れる。
-4. アクションを SHA で固定する(`nix run github:shiroinock/workflows#pinact -- run`)。`templates/pinact.yml` を置くと、固定していないアクションのある PR を落とす(`pinact / pinact`)。固定した SHA は、共通の Renovate 設定(`helpers:pinGitHubActionDigests`)が上げ、あとから足したアクションも固定する。
+4. アクションを SHA で固定する(`nix run github:shiroinock/workflows#pinact -- run`)。`templates/pinact.yml` を置くと、固定していないアクションのある PR と、共通の静的ルールに引っかかる PR を落とす(`pinact / pinact`)。固定した SHA は、共通の Renovate 設定(`helpers:pinGitHubActionDigests`)が上げ、あとから足したアクションも固定する。
 5. 既定ブランチのルールセットで、CI のチェックを必須にする。必須のチェックが無いと、自動マージは CI の結果を待たずにすぐマージする。
    Claude のレビューの `review / verdict` も必須にする。指摘が残っている PR は、手でもマージできなくなる(workflow を変える PR は Claude がレビューできないので通り、人が見てマージする)。
 
@@ -52,7 +53,7 @@ Claude のレビュー(PR ごとにトークンを使う)が繰り返し出す�
 1. **集めて選ぶ**(このリポジトリの `rule-harvest.yml`、毎週月曜):全リポジトリの Claude の行コメントと issue「あとで直す」の指摘を集め(トークンは使わない)、Claude(Sonnet)が1週分をまとめて1度だけ読んで、静的解析に回せるものを選ぶ。大半は動きの意味を追わないと分からない指摘なので落とす。残ったものは、置き場所(下の順番)と元になった指摘を付けて、issue「ルール候補」に書く。同じ形が次の週にも出たら、その issue に足す。
 2. **人が選ぶ**:採用するものはルールにする PR を出し、見送るものは「Close as not planned」で閉じる(もう出さない)。
 3. **ルールにする**:置き場所は `static-rules/README.md` の順番で決める。そのリポジトリがすでに回しているツールに組み込みのルールがあればそれを有効にし、型の情報が要るものは型を扱えるツールに任せ、どのツールにも無く構文の形だけで判定できるものだけを `static-rules/` に ast-grep で書く。`static-rules/` を変える PR では、`rules-impact.yml` が全リポジトリの既定ブランチに当てた件数を出す(誤検知を見るため)。
-4. **見つけて直す**:CI の `static-rules.yml` が落とし、手元の `nix run github:shiroinock/workflows#rules -- --fix` が直す。CI からは push しない(GITHUB_TOKEN の push では次の検査が走らないため)。
+4. **見つけて直す**:CI の `pinact.yml`(アクションの固定と同じジョブ)が落とし、手元の `nix run github:shiroinock/workflows#rules -- --fix` が直す。CI からは push しない(GITHUB_TOKEN の push では次の検査が走らないため)。
 5. **重ねない**:レビューのプロンプトは、CI の lint と共通の静的ルールで見つかるものを指摘しないように、また静的解析で拾えそうな指摘には目印を付けるようにしている。ツールの版上げで組み込みのルールが代わりになったら、ast-grep のルールを消す候補も出る。
 
 `rule-harvest.yml` を動かすには、このリポジトリに次を入れる。

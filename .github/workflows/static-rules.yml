@@ -1,9 +1,8 @@
-# Reusable: fails a PR when code matches one of the shared ast-grep rules in static-rules/. The
-# rules come from Claude's review findings that a static check catches cheaper and sooner (see
-# static-rules/README.md and rule-harvest.yml). Nothing is pushed: fix it locally with
-# `nix run github:shiroinock/workflows#rules -- --fix`. Call it from templates/static-rules.yml.
-#
-# ast-grep and the rules come from this repository's flake at workflows_ref.
+# Retired: the shared static rules now run in pinact.yml's job, which every repository calls, so
+# that a push does not pay for one more job (a private repository is billed at least a minute per
+# job). This stays so that the repositories which still call it keep working: the job is skipped
+# (a skipped job is not billed) unless standalone is true. Delete the caller's
+# .github/workflows/static-rules.yml, or pass standalone: true where pinact.yml is not called.
 name: 共通の静的ルール
 
 on:
@@ -15,11 +14,18 @@ on:
           同じ SHA を渡す。
         type: string
         default: main
+      standalone:
+        description: >-
+          pinact.yml を呼ばないリポジトリで、ここで静的ルールを流すときだけ true にする。
+          false(既定)なら何もしない(静的ルールは pinact.yml のジョブで流れる)。
+        type: boolean
+        default: false
 
 permissions: {}
 
 jobs:
   rules:
+    if: inputs.standalone
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
