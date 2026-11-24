@@ -28,7 +28,7 @@ on:
       skip_workflows:
         description: >-
           直しにいかないワークフローのファイル名(空白区切り。例 "e2e.yml deploy-preview.yml")。
-          Claude のレビュー(claude-code-review.yml)、アクションの固定(pinact.yml)、共通の静的ルール(static-rules.yml)は、これに書かなくても飛ばす。
+          Claude のレビュー(claude-code-review.yml)、アクションの固定と共通の静的ルール(pinact.yml、以前の static-rules.yml)は、これに書かなくても飛ばす。
         type: string
         default: ''
     secrets:
@@ -40,11 +40,22 @@ permissions: {}
 jobs:
   # Finds the PR the failed run belongs to, and decides whether to try. Nothing from the branch
   # runs here.
+  #
+  # The shared workflows that are not fixed here are left out before the job starts: the review
+  # fails on purpose while findings remain; pinact can only be fixed in .github/workflows, which
+  # Claude does not touch here; the shared static rules (in pinact.yml, formerly static-rules.yml)
+  # need nix, which this job lacks, so Claude could not check its fix and would hand the PR to a
+  # person (and the label would stop the fixes for the CI too). The pre-push hook and
+  # `nix run github:shiroinock/workflows#rules -- --fix` fix those locally. Every job started is
+  # billed as at least a minute in a private repository, and the review fails on many pushes.
   triage:
     if: >-
       github.event.workflow_run.conclusion == 'failure' &&
       github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.head_repository.full_name == github.repository
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      !contains(github.event.workflow_run.path, '/claude-code-review.yml') &&
+      !contains(github.event.workflow_run.path, '/pinact.yml') &&
+      !contains(github.event.workflow_run.path, '/static-rules.yml')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -68,14 +79,10 @@ jobs:
           WORKFLOW_PATH: ${{ github.event.workflow_run.path }}
           SKIP: ${{ inputs.skip_workflows }}
         run: |
-          # The review fails on purpose while findings remain; pinact can only be fixed in
-          # .github/workflows, which Claude does not touch here; the shared static rules need nix,
-          # which this job lacks, so Claude could not check its fix and would hand the PR to a
-          # person (and the label would stop the fixes for the CI too). The pre-push hook and
-          # `nix run github:shiroinock/workflows#rules -- --fix` fix those locally.
+          # The shared workflows are left out by the job's if; these are the caller's own.
           workflow=${WORKFLOW_PATH%%@*}
           workflow=${workflow##*/}
-          for skip in claude-code-review.yml pinact.yml static-rules.yml $SKIP; do
+          for skip in $SKIP; do
             if [ "$workflow" = "$skip" ]; then
               echo "直しにいかない:$workflow は直す対象のワークフローではない"
               echo "try=false" >> "$GITHUB_OUTPUT"
@@ -278,7 +285,7 @@ jobs:
 
             ## 手順
             1. リポジトリの `AGENTS.md`・`CLAUDE.md`・`CONTRIBUTING.md` を読み、決まりと確かめ方を知る(無いものは飛ばす)。
-            2. `gh run view ${{ github.event.workflow_run.id }} --log-failed` で、落ちたところを読む。同じコミットでほかのワークフローも落ちていることがあるので、`gh pr checks ${{ needs.triage.outputs.pr }}` で落ちた検査を見て、Claude のレビュー(`claude-code-review.yml`)・アクションの固定(`pinact.yml`)・共通の静的ルール(`static-rules.yml`)と、このリポジトリが外したワークフロー(`${{ inputs.skip_workflows }}`。空なら無し)以外の落ちた実行も `gh run view <id> --log-failed` で読み、まとめて直す(1回の push で済ませる)。`gh pr view ${{ needs.triage.outputs.pr }}` と `gh pr diff ${{ needs.triage.outputs.pr }}` で、PR が何をしようとしているかを読む。
+            2. `gh run view ${{ github.event.workflow_run.id }} --log-failed` で、落ちたところを読む。同じコミットでほかのワークフローも落ちていることがあるので、`gh pr checks ${{ needs.triage.outputs.pr }}` で落ちた検査を見て、Claude のレビュー(`claude-code-review.yml`)・アクションの固定と共通の静的ルール(`pinact.yml`、以前の `static-rules.yml`)と、このリポジトリが外したワークフロー(`${{ inputs.skip_workflows }}`。空なら無し)以外の落ちた実行も `gh run view <id> --log-failed` で読み、まとめて直す(1回の push で済ませる)。`gh pr view ${{ needs.triage.outputs.pr }}` と `gh pr diff ${{ needs.triage.outputs.pr }}` で、PR が何をしようとしているかを読む。
             3. 原因を決める。PR の変更が原因で、PR の目的を変えずに直せるなら直す。必要なら依存を入れ(ロックファイルに合わせて `npm ci` か `pnpm install --frozen-lockfile`)、落ちた検査を手元で流して、通ることを確かめる。
             4. 次のときは直さず、`needs_human` で返す。
                - 直し方が PR の目的や設計の判断にかかわる。

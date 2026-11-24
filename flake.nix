@@ -104,6 +104,8 @@
             pkgs.coreutils
             pkgs.gnugrep
             pkgs.gawk
+            pkgs.gnused
+            pkgs.diffutils
           ];
           # op (1Password CLI) comes from PATH when it is there; without it the secret is skipped.
           bashOptions = [ ];
@@ -151,7 +153,7 @@
         apps.repo-new = flake-utils.lib.mkApp { drv = repo-new; };
         # Called by .github/workflows/pinact.yml in other repositories, at the version locked here.
         packages.pinact = pkgs.pinact;
-        # Called by .github/workflows/static-rules.yml in other repositories, and locally.
+        # Called by .github/workflows/pinact.yml in other repositories, and locally.
         packages.rules = rules;
         # Called by .github/workflows/nix-hashes.yml in other repositories, and locally.
         packages.nix-hashes = nix-hashes;

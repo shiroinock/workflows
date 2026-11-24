@@ -1,5 +1,7 @@
-# Fails a PR when a workflow uses an action by a tag or branch instead of a commit SHA.
-# Fix it with `pinact run` (nix run github:shiroinock/workflows#pinact -- run).
+# Fails a PR when a workflow uses an action by a tag or branch instead of a commit SHA, or when code
+# matches the shared ast-grep rules (made from Claude's review findings that a static check catches
+# cheaper). Fix them with `pinact run` (nix run github:shiroinock/workflows#pinact -- run) and
+# `nix run github:shiroinock/workflows#rules -- --fix`.
 # The job lives in shiroinock/workflows; change it there, not here.
 name: アクションの固定
 

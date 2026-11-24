@@ -11,6 +11,9 @@
 #     リポジトリにだけ入れる(無いと毎回失敗するため)。
 #     非公開のリポジトリでは、merge-reservation.yml の schedule を外す(Actions の無料枠を食うため)。
 #     空のリポジトリには最初のコミットとして入れ、中身のあるリポジトリには PR を出す。
+#     その PR が開いたままなら、今の既定ブランチの上に作り直し、今のテンプレートに合わせる(中身が
+#     同じなら触らない)。PR がテンプレートの置き場所のほかのファイル(.github/baseline-skip など)を
+#     変えていれば、人の手が入ったものとして触らない。
 #     リポジトリの .github/baseline-skip に書いたテンプレート(1行に1つ、templates/ のファイル名)と、
 #     閉じた(マージしなかった)PR に入っていたファイルは、もう入れない。
 #   - シークレット CLAUDE_CODE_OAUTH_TOKEN:無ければ 1Password から入れる(op が使えるときだけ)。
@@ -250,26 +253,65 @@ workflows_step() { # <full> <private> <default branch> <empty>
     fail "   共通のワークフロー: 開いた PR を確かめられなかったので飛ばす"
     return
   fi
+  # What the branch should hold: every missing template and every copy with comments to add.
+  rm -rf "$work/want"
+  for t in "${files[@]}"; do
+    dest=$(dest_of "$(basename "$t")")
+    mkdir -p "$work/want/$(dirname "$dest")"
+    render "$t" "$private" > "$work/want/$dest"
+  done
+  for dest in "${updated[@]}"; do
+    mkdir -p "$work/want/$(dirname "$dest")"
+    cp "$work/updated/$dest" "$work/want/$dest"
+  done
+  local wanted
+  wanted=$({
+    for t in "${files[@]}"; do dest_of "$(basename "$t")"; done
+    printf '%s\n' "${updated[@]}"
+  } | grep . | sort -u)
+
   if [ -n "$pr" ]; then
-    echo "   共通のワークフロー: 足りない($names)。入れる PR #$pr がもうある"
-    return
+    # The open PR is made again on the current default branch, so it carries what the templates are
+    # now (the zizmor comments, say) and runs the checks the branch asks for now. Not when it
+    # changes a file outside the templates' places (a .github/baseline-skip a person wrote), and not
+    # when it already holds the same.
+    local pr_files all_dests
+    if ! pr_files=$(gh api --paginate "repos/$full/pulls/$pr/files" --jq '.[].filename' 2>/dev/null); then
+      fail "   共通のワークフロー: PR #$pr のファイルを読めなかったので飛ばす"
+      return
+    fi
+    pr_files=$(sort <<<"$pr_files")
+    all_dests=$(for t in "$TEMPLATES_DIR"/*; do dest_of "$(basename "$t")"; done | sort)
+    if [ -n "$(comm -23 <(grep . <<<"$pr_files") <(grep . <<<"$all_dests"))" ]; then
+      echo "   共通のワークフロー: 足りない($names)。PR #$pr はテンプレートのほかのファイルも変えているので、触らない"
+      return
+    fi
+    if [ "$pr_files" = "$wanted" ]; then
+      local same=true
+      while IFS= read -r dest; do
+        if ! gh api "repos/$full/contents/$dest?ref=$BRANCH" -H "Accept: application/vnd.github.raw" > "$work/branch" 2>/dev/null ||
+          ! cmp -s "$work/branch" "$work/want/$dest"; then
+          same=false
+          break
+        fi
+      done <<<"$wanted"
+      if [ "$same" = true ]; then
+        echo "   共通のワークフロー: 足りない($names)。入れる PR #$pr がもうある"
+        return
+      fi
+    fi
   fi
 
-  # One commit with every missing file, on a fresh branch from the default branch.
+  # One commit with every file, on the current default branch.
   local base base_tree tree commit entries
   if ! base=$(gh api "repos/$full/git/ref/heads/$default" --jq .object.sha 2>/dev/null) ||
     ! base_tree=$(gh api "repos/$full/git/commits/$base" --jq .tree.sha 2>/dev/null); then
     fail "   共通のワークフロー: 既定ブランチを読めなかった"
     return
   fi
-  entries=$({
-    for t in "${files[@]}"; do
-      render "$t" "$private" | jq -Rs --arg p "$(dest_of "$(basename "$t")")" '{path: $p, mode: "100644", type: "blob", content: .}'
-    done
-    for dest in "${updated[@]}"; do
-      jq -Rs --arg p "$dest" '{path: $p, mode: "100644", type: "blob", content: .}' < "$work/updated/$dest"
-    done
-  } | jq -s .)
+  entries=$(while IFS= read -r dest; do
+    jq -Rs --arg p "$dest" '{path: $p, mode: "100644", type: "blob", content: .}' < "$work/want/$dest"
+  done <<<"$wanted" | jq -s .)
   if ! tree=$(jq -n --arg b "$base_tree" --argjson e "$entries" '{base_tree: $b, tree: $e}' |
       gh api "repos/$full/git/trees" --input - --jq .sha 2>/dev/null) ||
     ! commit=$(jq -n --arg t "$tree" --arg p "$base" --arg m "共通のワークフローを入れる" '{message: $m, tree: $t, parents: [$p]}' |
@@ -277,10 +319,18 @@ workflows_step() { # <full> <private> <default branch> <empty>
     fail "   共通のワークフロー: コミットを作れなかった(トークンに Workflows の書き込みがあるか)"
     return
   fi
-  gh api -X DELETE "repos/$full/git/refs/heads/$BRANCH" --silent 2>/dev/null
-  if ! gh api "repos/$full/git/refs" -f ref="refs/heads/$BRANCH" -f sha="$commit" --silent 2>/dev/null; then
-    fail "   共通のワークフロー: ブランチを作れなかった"
-    return
+  if [ -n "$pr" ]; then
+    # Moving the branch keeps the PR open; deleting it would close the PR.
+    if ! gh api -X PATCH "repos/$full/git/refs/heads/$BRANCH" -f sha="$commit" -F force=true --silent 2>/dev/null; then
+      fail "   共通のワークフロー: PR #$pr のブランチを動かせなかった"
+      return
+    fi
+  else
+    gh api -X DELETE "repos/$full/git/refs/heads/$BRANCH" --silent 2>/dev/null
+    if ! gh api "repos/$full/git/refs" -f ref="refs/heads/$BRANCH" -f sha="$commit" --silent 2>/dev/null; then
+      fail "   共通のワークフロー: ブランチを作れなかった"
+      return
+    fi
   fi
   local body dept_note=""
   for t in "${files[@]}"; do
@@ -307,10 +357,17 @@ $(for dest in "${updated[@]}"; do echo "- \`$dest\`"; done)
 $added_list$updated_list
 - すでにあるファイルは、上の zizmor のコメントのほかは書き換えていません。
 - \`.github/workflows\` を変える PR なので、Claude のレビューは走りません。手で見てマージします。
+- 開いている間は、見回りがこの PR を今の既定ブランチと今のテンプレートに合わせて作り直します(中身が同じなら触りません)。このブランチでテンプレートの写しを書き換えても、作り直すと戻ります。
 - 入れたくないものは、このブランチで消し、そのファイル名(\`templates/\` での名前、例 \`claude-fix-ci.yml\`)を \`.github/baseline-skip\` に1行ずつ書いてからマージします。書かないと、次の見回りでまた入れる PR が出ます。
 - この PR を閉じる(マージしない)と、ここにあるファイルはもう入れません。あとから共通に足されたテンプレートは、また PR で出ます。
 - このリポジトリに共通の設定を一切入れたくないときは、トピック \`$SKIP_TOPIC\` を付けます。$dept_note"
-  if pr=$(gh pr create -R "$full" --head "$BRANCH" --base "$default" \
+  if [ -n "$pr" ]; then
+    if gh pr edit "$pr" -R "$full" --body "$body" > /dev/null 2>&1; then
+      echo "   共通のワークフロー: PR #$pr を今のテンプレートに合わせて作り直した($names)"
+    else
+      fail "   共通のワークフロー: PR #$pr のブランチは作り直したが、本文を直せなかった"
+    fi
+  elif pr=$(gh pr create -R "$full" --head "$BRANCH" --base "$default" \
       --title "共通のワークフローを入れる" --body "$body" 2>/dev/null); then
     echo "   共通のワークフロー: 入れる PR を出した($names): $(show_url "$pr")"
   else

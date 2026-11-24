@@ -71,6 +71,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      issues: read # the PR's comments (markers) and events (label taken off)
       checks: read
       statuses: read
     outputs:
@@ -109,10 +110,15 @@ jobs:
           fi
           # Wait for the last check of the commit: the review's findings and the CI's failures are
           # read together, once.
-          checks=$(gh pr view "$number" --json statusCheckRollup --jq '.statusCheckRollup')
-          pending=$(jq '[.[] | select((.status? // "COMPLETED") != "COMPLETED" or ((.state? // "") | IN("PENDING", "EXPECTED")))] | length' <<<"$checks")
+          # REST, not the PR's statusCheckRollup: that GraphQL field also reads each check's workflow
+          # run, which needs actions: read. check-runs gives the latest run of each check.
+          runs=$(gh api "repos/$GH_REPO/commits/$SHA/check-runs?per_page=100" --paginate --jq '.check_runs[] | {status, conclusion}' | jq -s .)
+          statuses=$(gh api "repos/$GH_REPO/commits/$SHA/status?per_page=100" --paginate --jq '.statuses[] | {state}' | jq -s .)
+          pending=$(jq -n --argjson r "$runs" --argjson s "$statuses" \
+            '[$r[] | select(.status != "completed")] + [$s[] | select(.state == "pending")] | length')
           [ "$pending" = 0 ] || skip "まだ走っている検査がある($pending 件)。最後の検査が終わったときに決める"
-          failed=$(jq '[.[] | select(((.conclusion? // "") | IN("FAILURE", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED")) or ((.state? // "") | IN("FAILURE", "ERROR")))] | length' <<<"$checks")
+          failed=$(jq -n --argjson r "$runs" --argjson s "$statuses" \
+            '[$r[] | select(.conclusion | IN("failure", "timed_out", "startup_failure", "action_required"))] + [$s[] | select(.state | IN("failure", "error"))] | length')
           [ "$failed" != 0 ] || skip "落ちた検査が無い"
           comments=$(gh api "repos/$GH_REPO/issues/$number/comments?per_page=100" --paginate \
             --jq '.[] | select(.body | contains("<!-- claude-fix-deps sha=")) | {created_at, body}' | jq -s .)
@@ -275,6 +281,9 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allow_fork_prs: 'false'
+          # The action refuses a run that a bot started unless the bot is listed here; the runs
+          # this job answers are the dependency bots' own.
+          allowed_bots: ${{ inputs.bots }}
           additional_permissions: |
             actions: read
           prompt: |
