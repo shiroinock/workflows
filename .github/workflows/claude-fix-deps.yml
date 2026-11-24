@@ -102,7 +102,7 @@ jobs:
           # REST, not the PR's statusCheckRollup: that GraphQL field also reads each check's workflow
           # run, which needs actions: read. check-runs gives the latest run of each check.
           runs=$(gh api "repos/$GH_REPO/commits/$SHA/check-runs?per_page=100" --paginate --jq '.check_runs[] | {status, conclusion}' | jq -s .)
-          statuses=$(gh api "repos/$GH_REPO/commits/$SHA/status" --jq '[.statuses[] | {state}]')
+          statuses=$(gh api "repos/$GH_REPO/commits/$SHA/status?per_page=100" --paginate --jq '.statuses[] | {state}' | jq -s .)
           pending=$(jq -n --argjson r "$runs" --argjson s "$statuses" \
             '[$r[] | select(.status != "completed")] + [$s[] | select(.state == "pending")] | length')
           [ "$pending" = 0 ] || skip "まだ走っている検査がある($pending 件)。最後の検査が終わったときに決める"
