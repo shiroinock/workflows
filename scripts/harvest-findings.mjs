@@ -29,7 +29,8 @@ const REVIEW_WORKFLOW = '.github/workflows/claude-code-review.yml';
 const CLAUDE = 'claude[bot]';
 const NITS_MARKER = /^<!-- claude-review-nits pr=(\d+) -->/;
 const CANDIDATE_MARKER = /<!-- rule-candidate key=([a-z0-9-]+) -->/;
-// Lint settings worth showing, so the sorting can tell which built-in rules are already on.
+// Lint and Renovate settings worth showing, so the sorting can tell which built-in rules and
+// settings are already on.
 const CONFIG_FILES = [
   'biome.json',
   'biome.jsonc',
@@ -42,6 +43,12 @@ const CONFIG_FILES = [
   '.shellcheckrc',
   '.swiftlint.yml',
   'package.json',
+  'renovate.json',
+  'renovate.json5',
+  '.github/renovate.json',
+  '.github/renovate.json5',
+  '.renovaterc',
+  '.renovaterc.json',
   '.github/static-rules-off',
 ];
 const MAX_CONFIG = 4000;
@@ -98,6 +105,12 @@ async function rootFiles(repo, branch) {
   return data ? data.tree.map((t) => (t.type === 'tree' ? `${t.path}/` : t.path)) : [];
 }
 
+// Names only: enough to tell whether a CI step is already there without the workflows' text.
+async function workflowFiles(repo) {
+  const { data } = await api(`repos/${repo}/contents/.github/workflows`, { allow404: true });
+  return Array.isArray(data) ? data.filter((f) => f.type === 'file').map((f) => f.name) : [];
+}
+
 const result = { since, sinceDays, repos: [], items: [], openCandidates: [] };
 
 for (const r of await repositories()) {
@@ -110,6 +123,7 @@ for (const r of await repositories()) {
     private: r.private,
     language: r.language,
     rootFiles: await rootFiles(repo, r.default_branch),
+    workflows: await workflowFiles(repo),
     configs: {},
   };
   for (const f of CONFIG_FILES) {
