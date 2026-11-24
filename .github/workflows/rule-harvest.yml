@@ -85,6 +85,8 @@ jobs:
             - `static-rules/README.md`:ルールの置き場所を決める順番。必ずこれに従います。
             - `static-rules/rules/`:すでにある共通の ast-grep のルール。
             - `STANDARDS.md`:リポジトリで揃えているツール。
+            - `renovate/default.json`:各リポジトリの Renovate が `extends` で読む共通の設定。各リポジトリの `renovate.json` は、たいていこれを読むだけです。
+            - `templates/` と `.github/workflows/`:各リポジトリに置く CI と、それが呼ぶ共通のワークフロー。各リポジトリのワークフローは、たいていここを呼ぶだけです。
 
             ## 選び方
             1. 指摘のほとんどは、動きの意味を追わないと分からないもので、静的解析には回せません。それらは落とします。迷ったら落とします。
@@ -93,7 +95,7 @@ jobs:
             4. 置き場所は `static-rules/README.md` の順番で決め、`action` と `tool` に書きます。
                - `setting`:lint のルールではなく、ツールの設定を変える・CI に1手足す・Renovate の設定で直すことで、起きなくできるか機械的に直せるもの(設定ファイルの読み込み時の診断、設定のスキーマや版のずれなど)。`tool` にはそのツール(`biome`、`renovate`、`github-actions` など)、`rule` には変える設定のキーか足すコマンド(例:`biome migrate --write`)を書きます。設定のキーやコマンドは、そのツールの公式の文書を WebFetch で開いて確かめます。確かめられなかったら候補にしません。ルールで見つけるより先に、ここで起きなくできないかを考えます。
                - `enable`:既存のツールの組み込みのルールを有効にする。`rule` には正式なルール名を書きます。ルール名は、そのツールの公式の文書を WebFetch で開いて確かめます。確かめられなかったら候補にしません。
-               `setting` と `enable` は、`configs` と `workflows` を見て、そのリポジトリにすでに入っているものは候補にしません(`workflows` は名前だけなので、中身が分からず入っているか判断できないときは落とします)。
+               `setting` と `enable` は、そのリポジトリにすでに入っているものは候補にしません。Renovate は `configs` の設定と、それが `extends` する `renovate/default.json` を、CI は `workflows` の名前と、`templates/` にある同じ名前のファイルが呼ぶ共通のワークフローを見て決めます。共通の設定やワークフローに足せば済むなら、`repos` にはそれを使う全リポジトリを書きます。`workflows` の名前が `templates/` に無く、中身が分からず入っているか判断できないときは落とします。
                - `custom`:どのツールにも無く、構文の形だけで判定できるので、`static-rules/` に ast-grep のルールを書く(`tool` は `ast-grep`)。JS/TS だけで Biome を回しているなら `biome-plugin` も選べます。`rule` には ast-grep の `id` にする名前の案を書きます。
                - `retire`:`static-rules/rules/` にあるルールのうち、ツールの組み込みのルールで代わりが利くようになったもの。
                型の情報やファイルをまたぐ解析が要るものは、ast-grep では書けません。組み込みのルールが無ければ落とします。
@@ -201,7 +203,7 @@ jobs:
                evidence($p; $owner) +
                ["",
                 "## 進め方", "",
-                "- 採用するなら、置き場所の順番(`static-rules/README.md`)に沿って進めます。設定や組み込みのルールなら `ts-template`(CI の1手ならここの共通のワークフロー)と各リポジトリの設定を変える PR を、ast-grep なら `static-rules/rules/` にルールとテストを足す PR を出します。この issue に `@claude` と書くか、手元の Claude Code にこの issue の URL を渡して頼めます(ルールの PR はここで、ほかのリポジトリの設定の PR は手元で)。",
+                "- 採用するなら、置き場所の順番(`static-rules/README.md`)に沿って進めます。Renovate の設定ならここの `renovate/default.json` を、CI の1手ならここの共通のワークフローを、ツールの設定や組み込みのルールなら `ts-template` と各リポジトリの設定を変える PR を、ast-grep なら `static-rules/rules/` にルールとテストを足す PR を出します。この issue に `@claude` と書くか、手元の Claude Code にこの issue の URL を渡して頼めます(ルールの PR はここで、ほかのリポジトリの設定の PR は手元で)。",
                 "- 見送るなら、理由を書いて「Close as not planned」で閉じます。同じ形の指摘が見つかっても、もう出しません。採用して閉じたあとに同じ形がまた見つかったときは、ルールが効いていないので新しく開きます。",
                 "",
                 "[この候補を出した実行](\($run))"]) | join("\n")' <<<"$c")
