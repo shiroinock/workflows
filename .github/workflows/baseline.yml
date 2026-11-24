@@ -1,6 +1,8 @@
 # Once a week, puts the common settings into every repository of the owner with repo-baseline
 # (scripts/repo-baseline.sh): the templates/ a repository lacks come as a PR (an empty repository
-# gets them as its first commit), and the merge settings and the ruleset are set. A repository
+# gets them as its first commit), and the merge settings and the ruleset are set. Copies already
+# there get, in the same PR, only the "# zizmor: ignore[...]" comments of their template
+# (scripts/zizmor-ignores.awk). A repository
 # made with repo-new already has them; this catches the ones made otherwise (in the browser, with
 # plain gh repo create) and spreads templates added here later. Repositories with the topic
 # no-baseline are left alone.

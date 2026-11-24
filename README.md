@@ -6,7 +6,8 @@ shiroinock のリポジトリで共通に使う GitHub Actions の再利用ワ�
 |---|---|
 | `claude.yml` | オーナーが issue・PR コメント・レビューで `@claude` と書くと Claude Code が動く。ほかの人のメンションでは動かない |
 | `claude-review.yml` | 同じリポジトリのブランチから来た、下書きでない PR を Claude Code がレビューする。ボットの PR や push は `allowed_bots`(既定は Renovate と、CI の直しを push する Claude)に挙げたものだけ。直す指摘が無ければラベル「マージ予約」を付ける。検査 `review / verdict` は、指摘が残っている間は落ちる(必須の検査にする)。直さなくてもマージできるが直す価値のある小さい指摘は、マージを止めずに issue「あとで直す」へ PR ごとにまとめる(`collect_nits: false` で止める。呼ぶ側は `issues: write` を渡す) |
-| `claude-fix-ci.yml` | PR の CI が落ちたら、Claude Code が原因を読んで枝を直し、push する(CI とレビューが走り直す)。人が直すべきもの、または決めた回数(既定 2 回)で直らないものは、PR で持ち主にメンションし、ラベル「人の手が要る」を付けて止まる。下書きとボットの PR には手を出さない。すべてのワークフローの完了を受け、PR で落ちた実行だけを拾うので、CI の名前を合わせる必要は無い(CI が無ければ何もしない)。Claude のレビュー・アクションの固定・共通の静的ルールは飛ばす(静的ルールは手元の pre-push フックか `rules -- --fix` で直す)。ほかに飛ばしたいものは `skip_workflows` にファイル名を渡す |
+| `claude-fix-ci.yml` | PR の CI が落ちたら、Claude Code が原因を読んで枝を直し、push する(CI とレビューが走り直す)。人が直すべきもの、または決めた回数(既定 2 回)で直らないものは、PR で持ち主にメンションし、ラベル「人の手が要る」を付けて止まる。下書きとボットの PR には手を出さない(依存の更新のボットの PR は `claude-fix-deps.yml` が扱う)。すべてのワークフローの完了を受け、PR で落ちた実行だけを拾うので、CI の名前を合わせる必要は無い(CI が無ければ何もしない)。Claude のレビュー・アクションの固定・共通の静的ルールは飛ばす(静的ルールは手元の pre-push フックか `rules -- --fix` で直す)。ほかに飛ばしたいものは `skip_workflows` にファイル名を渡す |
+| `claude-fix-deps.yml` | 依存の更新のボット(既定は Renovate)の PR が、Claude のレビューの指摘か CI の失敗で止まったら、Claude Code が枝を直して push し、CI とレビューに確かめさせる。ソースや設定を更新に合わせる、一緒に上げるべき依存を上げる、SDK が決める版を外れた依存を戻す、など手を動かすことだけをする。「この更新を見送るか」の判断と、直せないもの(ネイティブの道具で作るファイル、workflow や Renovate の設定の変更)は、選べる道を書いて持ち主にメンションし、ラベル「人の手が要る」を付けて止まる。決めた回数(既定 2 回)で進まないときも同じ。枝のパッケージのコードは動かさない(依存を入れない・テストもビルドも流さない。公開されて間もないパッケージの中身を Claude のトークンのそばで動かさないため)。lock ファイルは、レジストリの情報だけを読むコマンド(`pnpm install --lockfile-only --ignore-scripts` など)で作り直す。PR のコミットの最後の検査が終わったときに1度だけ動く |
 | `merge-reservation.yml` | 「マージ予約」の付いた PR が既定ブランチに向いたら、自動マージ(マージコミット)を入れる。積み重ねた PR は、下の PR がマージされて付け替わるまで待つ |
 | `dept.yml` | [dept](https://github.com/shiroinock/dept) で依存の遅れ(最新版までに出たリリースを major 30 / minor 3 / patch 1 で重み付けした合計)を数え、README に貼るバッジ `dept.svg`、どの依存がどれだけ遅れているかのレポート `dept.md`、結果 `dept.json` をブランチ `dept-badge` に置く。バッジは dept が自分で描き、外部のサービスは使わない。dept はリリースから取り、来歴の attestation を確かめてから使う。調べられなかった依存があれば、前のバッジを上書きせずに失敗する(`allow_errors: true` で置く)。main への push、毎週月曜、手動で走る。マージ予約(GITHUB_TOKEN)のマージは push を出さないので、`merge-reservation.yml` に `ci_workflow` を渡しているリポジトリでは、そのあと dispatch される CI が成功したときにも走る(CI の `name:` が `CI` であること)。`repo-baseline` は、ルートに `pnpm-lock.yaml` か `package-lock.json` があるリポジトリにだけ入れる(公開・非公開を問わない)。README には `[![dept](https://github.com/<owner>/<repo>/raw/dept-badge/dept.svg)](https://github.com/<owner>/<repo>/blob/dept-badge/dept.md)` と書き、クリックでレポートが開くようにする。`github.com/…/raw/…` の形なら、非公開のリポジトリでも読める人には表示される(`raw.githubusercontent.com` は非公開では表示されない) |
 | `pinact.yml` | 1つのジョブで2つを確かめ、引っかかる PR を落とす(`pinact / pinact`。必須の検査にする)。(1) アクションを SHA で固定していないもの(pinact)。(2) 共通の静的ルール(`static-rules/` の ast-grep のルール)に引っかかるコード。push はしない。手元で `pinact run` と `nix run github:shiroinock/workflows#rules -- --fix` を流すと直る。外したい静的ルールは `.github/static-rules-off` に書く。どちらも数秒で終わるので、非公開のリポジトリで1ジョブ1分と数えられる分を1つで済ませる |
@@ -62,7 +63,7 @@ nix run github:shiroinock/workflows#repo-baseline -- <名前> ...           # �
 
 dotfiles では `repo-new`・`repo-baseline` という名前で入っている。`repo-baseline` は何度流してもよく、次を入れる。
 
-- `templates/` のうち、まだ無いもの(Renovate の設定を含む。`dept.yml` は、ルートに `pnpm-lock.yaml` か `package-lock.json` があるリポジトリにだけ)。あるものは書き換えない。空のリポジトリには最初のコミットとして入れ、中身のあるリポジトリには PR を出す(`.github/workflows` を変えるので、手で見てマージする)。非公開のリポジトリでは、`merge-reservation.yml` の schedule を外す。
+- `templates/` のうち、まだ無いもの(Renovate の設定を含む。`dept.yml` は、ルートに `pnpm-lock.yaml` か `package-lock.json` があるリポジトリにだけ)。あるものは書き換えない。ただし、テンプレートの行に付けた zizmor の ignore のコメント(`@main` を追うこと、`pull_request_target` などの起動条件を使うことを、理由を書いて抑えるもの)は、すでにある写しの同じ行にも足す。足すのは同じ共通のジョブを呼ぶ写し(テンプレートの `uses: shiroinock/workflows/…@` の行があるもの。SHA で固定していてもよい)だけで、リポジトリが書き換えた行には触らない。空のリポジトリには最初のコミットとして入れ、中身のあるリポジトリには PR を出す(`.github/workflows` を変えるので、手で見てマージする)。非公開のリポジトリでは、`merge-reservation.yml` の schedule を外す。
   - 要らないテンプレートは、リポジトリの `.github/baseline-skip` に `templates/` でのファイル名を1行ずつ書く。入れる PR を閉じた(マージしなかった)ときも、その PR のファイルはもう入れない。
   - API のエラーは「無い」「空」とみなさず、その手順を飛ばす。失敗が1つでもあれば 1 で終わる。
 - シークレット `CLAUDE_CODE_OAUTH_TOKEN`:無ければ 1Password から入れる(手元で `op` が使えるときだけ。参照は `CLAUDE_TOKEN_OP_REF` で替えられる)。
@@ -100,7 +101,7 @@ Claude のレビュー(PR ごとにトークンを使う)が繰り返し出す�
 
 ## Claude の使用量
 
-`claude.yml`・`claude-review.yml`・`claude-fix-ci.yml` は、Claude Code が使った量を artifact `claude-usage-<ジョブ>-<試行>` に残す(90 日)。サブスクのクオータのうち、Action がどれだけ食っているかを見る参考にする。
+`claude.yml`・`claude-review.yml`・`claude-fix-ci.yml`・`claude-fix-deps.yml` は、Claude Code が使った量を artifact `claude-usage-<ジョブ>-<試行>` に残す(90 日)。サブスクのクオータのうち、Action がどれだけ食っているかを見る参考にする。
 
 - Claude Code の OpenTelemetry の出力(OTLP の http/json)を、ランナーの中だけで受ける小さな口(Python の標準ライブラリ)に送らせ、受けたものをそのまま1行ずつ `otel.jsonl` に書く。外へは送らない。
 - 入るもの:リクエストごとのモデル・入力と出力のトークン・キャッシュの読み書き・API 料金に換算した費用(`claude_code.api_request`)、トークンと費用のメトリクス、ツールの名前と成否。`meta.json` に、リポジトリ・workflow・ジョブ・実行・PR か issue の番号を書く。
@@ -121,7 +122,7 @@ Claude のレビュー(PR ごとにトークンを使う)が繰り返し出す�
 ここの変更は、`@main` で呼ぶすべてのリポジトリにすぐ届く。そのため PR ごとに CI(`lint`)で次を確かめ、必須のチェックにしている。道具と版は `flake.nix` と `flake.lock` で決まり、手元でも同じものが流れる。
 
 - actionlint(`run:` の中は shellcheck):共通の workflow とテンプレートの文法・式・入力
-- zizmor:権限の広げすぎ、信頼できない値の埋め込み、SHA で固定していないアクションなど、Actions のセキュリティ
+- zizmor:権限の広げすぎ、信頼できない値の埋め込み、SHA で固定していないアクションなど、Actions のセキュリティ。`templates/` も見る(各リポジトリで zizmor を流しても指摘が出ないよう、わざとそうしている行には理由付きの `# zizmor: ignore[...]` を付ける)
 - pinact:アクションをコミットの SHA で固定しているか(`pinact run` で固定し直せる)
 - renovate-config-validator:共通の Renovate 設定とテンプレート
 - `node --check` と shellcheck:`scripts/` のスクリプト

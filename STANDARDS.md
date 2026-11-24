@@ -11,7 +11,7 @@ shiroinock のリポジトリで揃えるツールと版。新しく作るリポ
 | TypeScript | 安定版の最新 | Renovate で上げる |
 | Python | uv、3.13 | `pyproject.toml` の `requires-python` と `.python-version`。ロックファイルは `uv.lock`。lint と整形は Ruff、テストは pytest |
 | 依存の更新 | Renovate | `templates/renovate.json` を置いて共通設定 `renovate/default.json` を読む。`dependabot.yml` は置かない |
-| 脆弱性の報告 | Dependabot のアラート | `repo-baseline`(dotfiles)でオンにする。自動の修正 PR はオフにし、修正の PR は Renovate が出す |
+| 脆弱性の報告 | Dependabot のアラート | `repo-baseline`(このリポジトリの `scripts/repo-baseline.sh`。`repo-new` で作るときと週に1度の見回りでも流れる)でオンにする。自動の修正 PR はオフにし、修正の PR は Renovate が出す |
 
 ## Renovate の共通設定
 
@@ -19,6 +19,8 @@ shiroinock のリポジトリで揃えるツールと版。新しく作るリポ
 - 脆弱性の修正は予定を待たずにすぐ出し、ラベル「セキュリティ」を付ける。
 - Node と Python の大きな版上げは出さない。全リポジトリで揃えて、手で上げる。
 - Renovate 自身は自動マージしない。PR は Claude のレビューを通り、指摘が無ければ「マージ予約」で自動マージされる。
+- major の版上げは PR を出さず、Dependency Dashboard の一覧に載せるだけにする。上げたいときに、そこでチェックを入れて PR を出す。
+- レビューの指摘や CI の失敗で止まった PR は、`claude-fix-deps.yml` が枝を直して先へ進める。見送るかの判断が要るものは持ち主に渡す。間接の依存の脆弱性は、lock ファイルの更新(lockFileMaintenance)がこれで流れることで直る。
 
 ## CI のコストとキャッシュ
 

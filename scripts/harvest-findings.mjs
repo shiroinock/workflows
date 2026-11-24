@@ -29,7 +29,7 @@ const REVIEW_WORKFLOW = '.github/workflows/claude-code-review.yml';
 const CLAUDE = 'claude[bot]';
 const NITS_MARKER = /^<!-- claude-review-nits pr=(\d+) -->/;
 const CANDIDATE_MARKER = /<!-- rule-candidate key=([a-z0-9-]+) -->/;
-// Lint and Renovate settings worth showing, so the sorting can tell which built-in rules and
+// Lint, Renovate and pnpm settings worth showing, so the sorting can tell which built-in rules and
 // settings are already on.
 const CONFIG_FILES = [
   'biome.json',
@@ -43,6 +43,7 @@ const CONFIG_FILES = [
   '.shellcheckrc',
   '.swiftlint.yml',
   'package.json',
+  'pnpm-workspace.yaml',
   'renovate.json',
   'renovate.json5',
   '.github/renovate.json',

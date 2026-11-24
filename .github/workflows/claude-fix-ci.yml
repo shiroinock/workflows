@@ -66,6 +66,7 @@ jobs:
       try: ${{ steps.pr.outputs.try }}
       attempt: ${{ steps.pr.outputs.attempt }}
       reason: ${{ steps.pr.outputs.reason }}
+      handoff: ${{ steps.pr.outputs.handoff }}
     steps:
       - name: PR と、直しにいくかを決める
         id: pr
@@ -110,6 +111,8 @@ jobs:
             reason="すでに人に渡している"
           elif [ "$attempt" -gt "$MAX" ]; then
             reason="直しにいく回数($MAX 回)を使い切った"
+            # The one reason to hand the PR over; the others say nothing.
+            echo "handoff=true" >> "$GITHUB_OUTPUT"
           fi
           if [ -n "${reason:-}" ]; then
             echo "直しにいかない:$reason"
@@ -215,7 +218,7 @@ jobs:
       # this receiver, which only appends what it gets to a file on the runner; the file is kept as
       # the artifact claude-usage-<job>-<attempt> below. Prompts, replies and tool input are not in
       # it: Claude Code redacts them unless told otherwise. Same steps in claude.yml,
-      # claude-review.yml and claude-fix-ci.yml.
+      # claude-review.yml, claude-fix-ci.yml and claude-fix-deps.yml.
       - name: Claude の使用量を受け取る口を開く
         env:
           OUT: ${{ runner.temp }}/claude-usage
@@ -399,7 +402,7 @@ jobs:
   # what happened itself when it ran.)
   handoff:
     needs: triage
-    if: needs.triage.outputs.try == 'false' && needs.triage.outputs.reason != ''
+    if: needs.triage.outputs.handoff == 'true'
     # One at a time per PR, so that the label check below sees what an earlier one did: several
     # workflows failing on the same commit each come here once the fixes ran out. If a waiting
     # one is replaced by a newer one, the newer one saw no label at triage either, and hands over.
@@ -421,10 +424,6 @@ jobs:
           RUN_URL: ${{ github.event.workflow_run.html_url }}
           REASON: ${{ needs.triage.outputs.reason }}
         run: |
-          case "$REASON" in
-            "下書きの PR は、作っている人に任せる"|"ボットの PR では、枝のコマンドを Claude のトークンのそばで動かさない"|"すでに人に渡している")
-              echo "知らせない:$REASON"; exit 0 ;;
-          esac
           if gh pr view "$PR" --json labels --jq '[.labels[].name] | index("人の手が要る")' | grep -qv '^null$'; then
             echo "知らせない:もう人に渡してある"; exit 0
           fi
