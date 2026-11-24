@@ -24,6 +24,9 @@
           pkgs.renovate
           pkgs.nodejs_24
           pkgs.ast-grep
+          pkgs.gawk
+          pkgs.gnused
+          pkgs.diffutils
         ];
         # The shared ast-grep rules, run on the current directory. `--fix` applies the fixes.
         # Rule ids listed in .github/static-rules-off (one per line, # starts a comment) are off.
@@ -55,7 +58,14 @@
             echo "== actionlint (with shellcheck)"
             actionlint .github/workflows/*.yml templates/*.yml
             echo "== zizmor"
-            zizmor --offline --no-progress .github/workflows templates
+            # A directory other than .github/workflows yields nothing to zizmor; name the templates.
+            zizmor --offline --no-progress .github/workflows templates/*.yml
+            echo "== zizmor-ignores.awk: a copy without the ignore comments gets them back"
+            for t in templates/*.yml; do
+              sed -E 's/ +# zizmor: ignore\[.*$//' "$t" > "$HOME/bare.yml"
+              awk -f scripts/zizmor-ignores.awk "$t" "$HOME/bare.yml" | diff -u "$t" -
+              awk -f scripts/zizmor-ignores.awk "$t" "$t" | diff -u "$t" -
+            done
             echo "== pinact: actions pinned to a commit"
             pinact run --check
             echo "== renovate-config-validator"
@@ -82,11 +92,13 @@
             pkgs.coreutils
             pkgs.gnugrep
             pkgs.gawk
+            pkgs.diffutils
           ];
           # op (1Password CLI) comes from PATH when it is there; without it the secret is skipped.
           bashOptions = [ ];
           text = ''
             export TEMPLATES_DIR="''${TEMPLATES_DIR:-${./templates}}"
+            export ZIZMOR_IGNORES_AWK="''${ZIZMOR_IGNORES_AWK:-${./scripts/zizmor-ignores.awk}}"
             ${builtins.readFile ./scripts/repo-baseline.sh}
           '';
         };

@@ -5,6 +5,8 @@
 #
 # 入れるもの:
 #   - 共通のワークフロー:templates/ のうち、まだ無いもの(Renovate の設定もここ)。あるものは書き換えない。
+#     ただし、テンプレートの行に付けた zizmor の ignore のコメントは、すでにある写しの同じ行にも足す
+#     (scripts/zizmor-ignores.awk。リポジトリが書き換えた行には触らない)。足すものがあれば同じ PR に入れる。
 #     dept.yml は、ルートに dept が読めるロックファイル(pnpm-lock.yaml か package-lock.json)がある
 #     リポジトリにだけ入れる(無いと毎回失敗するため)。
 #     非公開のリポジトリでは、merge-reservation.yml の schedule を外す(Actions の無料枠を食うため)。
@@ -23,6 +25,7 @@
 # 環境変数:
 #   OWNER                 対象のアカウント(既定 shiroinock)
 #   TEMPLATES_DIR         テンプレートの場所(nix のパッケージが、同じ版の templates/ を渡す)
+#   ZIZMOR_IGNORES_AWK    scripts/zizmor-ignores.awk の場所(これも nix のパッケージが渡す)
 #   CLAUDE_TOKEN_OP_REF   CLAUDE_CODE_OAUTH_TOKEN の 1Password の参照
 #   BASELINE_HIDE_PRIVATE 1 なら、非公開のリポジトリの名前とエラーの中身を出さない(公開のログ向け)
 #   GH_TOKEN              gh のトークン(手元では gh auth のものが使われる)。ワークフローを書くので
@@ -37,6 +40,9 @@ fail() { echo "$1"; failures=$((failures + 1)); }
 
 OWNER="${OWNER:-shiroinock}"
 TEMPLATES_DIR="${TEMPLATES_DIR:?TEMPLATES_DIR が無い(nix run github:shiroinock/workflows#repo-baseline で動かす)}"
+ZIZMOR_IGNORES_AWK="${ZIZMOR_IGNORES_AWK:?ZIZMOR_IGNORES_AWK が無い(nix run github:shiroinock/workflows#repo-baseline で動かす)}"
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
 CLAUDE_TOKEN_OP_REF="${CLAUDE_TOKEN_OP_REF:-op://AI-Shared/6kqqyn7mxdgvbx64e5gqisp74a/credential}"
 RULESET_NAME="main を守る"
 BRANCH="chore/common-workflows"
@@ -159,7 +165,8 @@ declined() { # <repo> <ref>
 
 workflows_step() { # <full> <private> <default branch> <empty>
   local full=$1 private=$2 default=$3 empty=$4 t dest r skip=""
-  local files=()
+  local files=() updated=()
+  rm -rf "$work/updated"
   if [ "$empty" = false ]; then
     if ! skip=$(declined "$full" "$default"); then
       fail "   共通のワークフロー: 断ったものを読めなかったので飛ばす"
@@ -177,7 +184,18 @@ workflows_step() { # <full> <private> <default branch> <empty>
         exists "$full" "$dest" "$default"
       fi
       r=$?
-      [ "$r" = 0 ] && continue
+      if [ "$r" = 0 ]; then
+        # Already there: only the template's zizmor ignore comments go into it, line by line.
+        [ "$dest" = renovate.json ] && continue
+        if ! gh api "repos/$full/contents/$dest?ref=$default" -H "Accept: application/vnd.github.raw" > "$work/current" 2>/dev/null; then
+          fail "   共通のワークフロー: $dest を読めなかったので飛ばす"
+          return
+        fi
+        mkdir -p "$work/updated/$(dirname "$dest")"
+        awk -f "$ZIZMOR_IGNORES_AWK" "$t" "$work/current" > "$work/updated/$dest"
+        cmp -s "$work/current" "$work/updated/$dest" || updated+=("$dest")
+        continue
+      fi
       if [ "$r" = 2 ]; then
         fail "   共通のワークフロー: $dest があるか確かめられなかったので飛ばす"
         return
@@ -198,12 +216,15 @@ workflows_step() { # <full> <private> <default branch> <empty>
     fi
     files+=("$t")
   done
-  if [ "${#files[@]}" -eq 0 ]; then
+  if [ "${#files[@]}" -eq 0 ] && [ "${#updated[@]}" -eq 0 ]; then
     echo "   共通のワークフロー: そろっている"
     return
   fi
   local names
-  names=$(for t in "${files[@]}"; do basename "$t"; done | paste -sd, -)
+  names=$({
+    for t in "${files[@]}"; do basename "$t"; done
+    for dest in "${updated[@]}"; do echo "$(basename "$dest") の zizmor のコメント"; done
+  } | paste -sd, -)
 
   if [ "$empty" = true ]; then
     # An empty repository has no branch to open a PR against, and the Git data API refuses it;
@@ -241,9 +262,14 @@ workflows_step() { # <full> <private> <default branch> <empty>
     fail "   共通のワークフロー: 既定ブランチを読めなかった"
     return
   fi
-  entries=$(for t in "${files[@]}"; do
-    render "$t" "$private" | jq -Rs --arg p "$(dest_of "$(basename "$t")")" '{path: $p, mode: "100644", type: "blob", content: .}'
-  done | jq -s .)
+  entries=$({
+    for t in "${files[@]}"; do
+      render "$t" "$private" | jq -Rs --arg p "$(dest_of "$(basename "$t")")" '{path: $p, mode: "100644", type: "blob", content: .}'
+    done
+    for dest in "${updated[@]}"; do
+      jq -Rs --arg p "$dest" '{path: $p, mode: "100644", type: "blob", content: .}' < "$work/updated/$dest"
+    done
+  } | jq -s .)
   if ! tree=$(jq -n --arg b "$base_tree" --argjson e "$entries" '{base_tree: $b, tree: $e}' |
       gh api "repos/$full/git/trees" --input - --jq .sha 2>/dev/null) ||
     ! commit=$(jq -n --arg t "$tree" --arg p "$base" --arg m "共通のワークフローを入れる" '{message: $m, tree: $t, parents: [$p]}' |
@@ -266,11 +292,20 @@ workflows_step() { # <full> <private> <default branch> <empty>
   [![dept](https://github.com/$full/raw/dept-badge/dept.svg)](https://github.com/$full/blob/dept-badge/dept.md)
   \`\`\`"
   done
-  body="shiroinock/workflows の \`templates/\` のうち、このリポジトリにまだ無いものを入れます(\`repo-baseline\` が出した PR です)。
+  local added_list="" updated_list=""
+  [ "${#files[@]}" -gt 0 ] && added_list="
+入れるもの:
 
 $(for t in "${files[@]}"; do echo "- \`$(dest_of "$(basename "$t")")\`"; done)
+"
+  [ "${#updated[@]}" -gt 0 ] && updated_list="
+すでにあるもののうち、テンプレートで zizmor の指摘を理由付きで抑えた行と同じ行に、そのコメントを足すもの(ほかの行は変えていません):
 
-- すでにあるファイルは書き換えていません。
+$(for dest in "${updated[@]}"; do echo "- \`$dest\`"; done)
+"
+  body="shiroinock/workflows の \`templates/\` に合わせます(\`repo-baseline\` が出した PR です)。
+$added_list$updated_list
+- すでにあるファイルは、上の zizmor のコメントのほかは書き換えていません。
 - \`.github/workflows\` を変える PR なので、Claude のレビューは走りません。手で見てマージします。
 - 入れたくないものは、このブランチで消し、そのファイル名(\`templates/\` での名前、例 \`claude-fix-ci.yml\`)を \`.github/baseline-skip\` に1行ずつ書いてからマージします。書かないと、次の見回りでまた入れる PR が出ます。
 - この PR を閉じる(マージしない)と、ここにあるファイルはもう入れません。あとから共通に足されたテンプレートは、また PR で出ます。
