@@ -1,0 +1,36 @@
+# Turns on auto-merge for this repository's own PRs labelled マージ予約, with the shared workflow in
+# this repository (the same one other repositories call from templates/merge-reservation.yml).
+# Named apart from merge-reservation.yml, which is the shared reusable workflow; claude-code-review.yml
+# passes this name to the review so that its reserve step starts this file.
+#
+# GITHUB_TOKEN cannot merge a PR that changes .github/workflows (scripts/merge-reservation.mjs leaves
+# a comment and skips it), and Claude does not review such a PR either, so those are still merged by
+# hand. PRs to static-rules/, scripts/, templates/, renovate/ and the documents are merged here.
+name: マージ予約
+
+on:
+  # pull_request_target: no code from the PR is checked out or run; the reusable workflow and the
+  # script both come from the default branch's commit, and nothing from the event reaches a shell.
+  pull_request_target: # zizmor: ignore[dangerous-triggers]
+    types: [labeled, edited, ready_for_review, reopened, closed]
+  # What GITHUB_TOKEN merged sends no events, so the PR stacked on it is picked up by this.
+  # A public repository, so the schedule costs no Actions minutes.
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  reserve:
+    # The same commit as this file; the newer $/ syntax is not used until it is confirmed for
+    # reusable workflows.
+    uses: ./.github/workflows/merge-reservation.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    with:
+      ci_workflow: ci.yml
+      # The scripts/ of the same commit as this file (the default branch's, for every trigger above).
+      workflows_ref: ${{ github.sha }}

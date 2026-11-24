@@ -1,8 +1,8 @@
 # Claude Code reviews this repository's own PRs, with the shared workflow in this repository (the
 # same one other repositories call from templates/claude-code-review.yml). A PR that changes
 # .github/workflows is not reviewed (Claude Code Action runs only when the workflows match the
-# default branch's), so most PRs here are read and merged by hand; PRs to static-rules/, scripts/
-# and the documents are reviewed.
+# default branch's), so most PRs here are read and merged by hand; PRs to static-rules/, scripts/,
+# templates/ and the documents are reviewed, and merged by merge-reservation-self.yml when clean.
 name: Claude のレビュー
 
 on:
@@ -24,6 +24,8 @@ jobs:
       actions: write
       id-token: write
     with:
+      # merge-reservation.yml here is the shared one; this repository's caller has another name.
+      merge_reservation_workflow: merge-reservation-self.yml
       review_focus: |
         - ここの変更は、`@main` で呼ぶすべてのリポジトリにすぐ届く。呼ぶ側のリポジトリが壊れないか、入力の既定値やテンプレートとの食い違いがないか。
         - `static-rules/` のルールは、誤検知が少ないか、`message`・`note` が日本語で分かるか、`fix:` が意味を変えないか、テストに引っかかる例と引っかからない例があるか。非公開のリポジトリのコードを写していないか。

@@ -34,6 +34,12 @@ on:
           マージは止めない。
         type: boolean
         default: true
+      merge_reservation_workflow:
+        description: >-
+          ラベル「マージ予約」を付けたあとで起こす、このリポジトリのマージ予約の workflow ファイル名
+          (templates/merge-reservation.yml を置いた名前。workflow_dispatch を受け付けるもの)。
+        type: string
+        default: merge-reservation.yml
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -269,6 +275,7 @@ jobs:
           REVIEWED: ${{ github.event.pull_request.head.sha }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           OUTCOME: ${{ steps.decide.outputs.outcome }}
+          MERGE_RESERVATION: ${{ inputs.merge_reservation_workflow }}
         run: |
           head=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
           if [ "$head" != "$REVIEWED" ]; then
@@ -284,9 +291,9 @@ jobs:
                 --description "レビュー済み。向き先が main になったら自動マージを入れる" 2>/dev/null || true
               gh pr edit "$PR" --add-label マージ予約
             fi
-            # shiroinock/workflows itself has no マージ予約 caller (its merge-reservation.yml is the
-            # shared one, which takes no workflow_dispatch); such a PR keeps the label and is merged by hand.
-            gh workflow run merge-reservation.yml --ref "$DEFAULT_BRANCH" ||
+            # shiroinock/workflows itself names its caller merge-reservation-self.yml: its
+            # merge-reservation.yml is the shared one, which takes no workflow_dispatch.
+            gh workflow run "$MERGE_RESERVATION" --ref "$DEFAULT_BRANCH" ||
               echo "::warning::マージ予約の workflow を起動できなかった(templates/merge-reservation.yml を置いていない?)。自動マージは入らないので、手でマージする"
           elif [ "$labelled" != 0 ]; then
             gh pr edit "$PR" --remove-label マージ予約

@@ -83,9 +83,9 @@ Claude のレビュー(PR ごとにトークンを使う)が繰り返し出す�
 
 ## このリポジトリの Claude
 
-ここにある共通の workflow を、このリポジトリ自身からも呼んでいる(`claude-code-review.yml` と `claude-mention.yml`。同じリポジトリの `./.github/workflows/…` を呼ぶので、PR の版の workflow が動く)。
+ここにある共通の workflow を、このリポジトリ自身からも呼んでいる(`claude-code-review.yml`・`claude-mention.yml`・`merge-reservation-self.yml`。同じリポジトリの `./.github/workflows/…` を呼ぶので、PR の版の workflow が動く)。
 
-- レビュー:`.github/workflows` を変える PR は Claude Code Action がレビューしないので、ここの PR の多くは通った扱いになり、手で見てマージする。`static-rules/`・`scripts/`・文書だけを変える PR はレビューされる。マージ予約の workflow は置いていないので、「マージ予約」が付いても自動マージは入らず、手でマージする。
+- レビュー:`.github/workflows` を変える PR は Claude Code Action がレビューしないので、ここの PR の多くは通った扱いになり、手で見てマージする。`static-rules/`・`scripts/`・`templates/`・文書だけを変える PR はレビューされ、指摘が 0 件で「マージ予約」が付けば `merge-reservation-self.yml` が自動マージを入れる(`merge-reservation.yml` は共通の再利用 workflow なので、呼び出し側は別の名前にし、レビューには入力 `merge_reservation_workflow` でその名前を渡している)。GITHUB_TOKEN でのマージは push を出さないので、そのあと main の CI を workflow_dispatch で走らせる。
 - `@claude`:issue「ルール候補」で `@claude` と書くと、ルールを足す PR を頼める。
 - シークレット `CLAUDE_CODE_OAUTH_TOKEN` と Claude の GitHub App が要る(`rule-harvest.yml` と同じもの)。
 
