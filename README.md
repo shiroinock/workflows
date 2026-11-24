@@ -71,6 +71,16 @@ Claude のレビュー(PR ごとにトークンを使う)が繰り返し出す�
 - ワークフローを変える PR では、Claude Code Action が既定ブランチと同じ内容か確かめるため、その PR のレビューは走らない。そのときはレビューの検査を通った扱いにし、理由を PR に1度だけコメントする。手で見てマージする。マージしたあとの PR から動く。
 - 積み重ねた PR では向き先の枝の workflow が使われるので、向き先が古いままだと同じ理由でレビューが走らない。PR の差に workflow の変更が無いのにレビューが走らなかったときは、ジョブを失敗にして見えるようにしている。
 
+## Claude の使用量
+
+`claude.yml`・`claude-review.yml`・`claude-fix-ci.yml` は、Claude Code が使った量を artifact `claude-usage-<ジョブ>-<試行>` に残す(90 日)。サブスクのクオータのうち、Action がどれだけ食っているかを見る参考にする。
+
+- Claude Code の OpenTelemetry の出力(OTLP の http/json)を、ランナーの中だけで受ける小さな口(Python の標準ライブラリ)に送らせ、受けたものをそのまま1行ずつ `otel.jsonl` に書く。外へは送らない。
+- 入るもの:リクエストごとのモデル・入力と出力のトークン・キャッシュの読み書き・API 料金に換算した費用(`claude_code.api_request`)、トークンと費用のメトリクス、ツールの名前と成否。`meta.json` に、リポジトリ・workflow・ジョブ・実行・PR か issue の番号を書く。
+- 入らないもの:プロンプト・応答・ツールの入力(Claude Code が伏せる)、アカウントの UUID。公開リポジトリの artifact は誰でも読めるので、伏せる設定(`OTEL_LOG_*`)は足さない。
+- 費用は API 料金での換算で、サブスクのクオータの消費率そのものではない。クオータの消費率は手元の Claude Code のステータスラインにしか出ないので、時間帯を合わせて見比べる。
+- Claude が走らなかったジョブ(ワークフローを変える PR のレビューなど)では残さない。`rule-harvest.yml` は、非公開のリポジトリの中身を読むのに公開のこのリポジトリで動くので、残さない。
+
 ## このリポジトリの Claude
 
 ここにある共通の workflow を、このリポジトリ自身からも呼んでいる(`claude-code-review.yml` と `claude-mention.yml`。同じリポジトリの `./.github/workflows/…` を呼ぶので、PR の版の workflow が動く)。
