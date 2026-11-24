@@ -11,7 +11,7 @@ shiroinock のリポジトリで揃えるツールと版。新しく作るリポ
 | TypeScript | 安定版の最新 | Renovate で上げる |
 | Python | uv、3.13 | `pyproject.toml` の `requires-python` と `.python-version`。ロックファイルは `uv.lock`。lint と整形は Ruff、テストは pytest |
 | 依存の更新 | Renovate | `templates/renovate.json` を置いて共通設定 `renovate/default.json` を読む。`dependabot.yml` は置かない |
-| 脆弱性の報告と修正 | Dependabot のアラートと security updates | `repo-baseline`(dotfiles)でどちらもオンにする。`dependabot.yml` は置かず、脆弱性の修正 PR だけを Dependabot が出す(間接の依存も lock ファイルだけを上げて直せる)。PR は Renovate のものと同じく Claude のレビューを通り、指摘が無ければ「マージ予約」で自動マージされる |
+| 脆弱性の報告と修正 | Dependabot のアラートと security updates | `repo-baseline`(このリポジトリの `scripts/repo-baseline.sh`。`repo-new` で作るときと週に1度の見回りでも流れる)でどちらもオンにする。`dependabot.yml` は置かず、脆弱性の修正 PR だけを Dependabot が出す(間接の依存も lock ファイルだけを上げて直せる)。PR は Renovate のものと同じく Claude のレビューを通り、指摘が無ければ「マージ予約」で自動マージされる |
 
 ## Renovate の共通設定
 
