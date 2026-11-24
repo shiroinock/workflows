@@ -45,8 +45,60 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      # Claude Code exports what it uses (tokens, cost and model per request) over OpenTelemetry to
+      # this receiver, which only appends what it gets to a file on the runner; the file is kept as
+      # the artifact claude-usage-<job>-<attempt> below. Prompts, replies and tool input are not in
+      # it: Claude Code redacts them unless told otherwise. Same steps in claude.yml,
+      # claude-review.yml and claude-fix-ci.yml.
+      - name: Claude の使用量を受け取る口を開く
+        env:
+          OUT: ${{ runner.temp }}/claude-usage
+        run: |
+          mkdir -p "$OUT"
+          cat > "$OUT/sink.py" <<'EOF'
+          import gzip, json, sys
+          from http.server import BaseHTTPRequestHandler, HTTPServer
+
+          class Sink(BaseHTTPRequestHandler):
+              def do_POST(self):
+                  body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                  if self.headers.get("Content-Encoding") == "gzip":
+                      body = gzip.decompress(body)
+                  try:
+                      data = json.loads(body)
+                  except ValueError:
+                      data = None
+                  if data:
+                      with open(sys.argv[1], "a") as f:
+                          f.write(json.dumps(data, separators=(",", ":")) + "\n")
+                  self.send_response(200)
+                  self.send_header("Content-Type", "application/json")
+                  self.end_headers()
+                  self.wfile.write(b"{}")
+
+              def log_message(self, *args):
+                  pass
+
+          HTTPServer(("127.0.0.1", 4318), Sink).serve_forever()
+          EOF
+          nohup python3 "$OUT/sink.py" "$OUT/otel.jsonl" > "$OUT/sink.log" 2>&1 &
+          for _ in $(seq 20); do
+            curl -fsS -o /dev/null -X POST -d '{}' http://127.0.0.1:4318/ && exit 0
+            sleep 0.5
+          done
+          echo "::warning::Claude の使用量を受け取る口が開かなかった。使用量は残らない"
+          cat "$OUT/sink.log"
+
       - name: Claude Code
         uses: anthropics/claude-code-action@acfe7992852970efb4fee683d63d628e3e52df67 # v1.0.286
+        env:
+          CLAUDE_CODE_ENABLE_TELEMETRY: '1'
+          OTEL_METRICS_EXPORTER: otlp
+          OTEL_LOGS_EXPORTER: otlp
+          OTEL_EXPORTER_OTLP_PROTOCOL: http/json
+          OTEL_EXPORTER_OTLP_ENDPOINT: http://127.0.0.1:4318
+          OTEL_METRICS_INCLUDE_ACCOUNT_UUID: 'false'
+          OTEL_RESOURCE_ATTRIBUTES: github.repository=${{ github.repository }},github.run_id=${{ github.run_id }},github.run_attempt=${{ github.run_attempt }},github.job=${{ github.job }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allow_fork_prs: 'false'
@@ -58,3 +110,29 @@ jobs:
           # Replies follow the owner, who writes in Japanese; code, identifiers and commands stay as they are.
           claude_args: >-
             --append-system-prompt "issue・PR へのコメントと PR の本文は日本語で書く。コード・識別子・コマンド・エラーメッセージは元のまま書く。"
+
+      # Kept only when Claude ran and exported something. meta.json tells which run, workflow and
+      # PR or issue the usage belongs to.
+      - name: Claude の使用量をまとめる
+        id: usage
+        if: always()
+        env:
+          OUT: ${{ runner.temp }}/claude-usage
+        run: |
+          if [ ! -s "$OUT/otel.jsonl" ]; then echo "has=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          number=$(jq -r '.pull_request.number // .issue.number // .workflow_run.pull_requests[0].number // empty' "$GITHUB_EVENT_PATH")
+          jq -n --arg repository "$GITHUB_REPOSITORY" --arg workflow "$GITHUB_WORKFLOW" \
+            --arg workflow_ref "$GITHUB_WORKFLOW_REF" --arg job "$GITHUB_JOB" --arg event "$GITHUB_EVENT_NAME" \
+            --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" --arg sha "$GITHUB_SHA" \
+            --arg number "$number" '$ARGS.named' > "$OUT/meta.json"
+          echo "has=true" >> "$GITHUB_OUTPUT"
+
+      - name: Claude の使用量を残す
+        if: always() && steps.usage.outputs.has == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: claude-usage-${{ github.job }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/claude-usage/otel.jsonl
+            ${{ runner.temp }}/claude-usage/meta.json
+          retention-days: 90
