@@ -121,14 +121,18 @@ jobs:
             '[$r[] | select(.conclusion | IN("failure", "timed_out", "startup_failure", "action_required"))] + [$s[] | select(.state | IN("failure", "error"))] | length')
           [ "$failed" != 0 ] || skip "落ちた検査が無い"
           comments=$(gh api "repos/$GH_REPO/issues/$number/comments?per_page=100" --paginate \
-            --jq '.[] | select(.body | contains("<!-- claude-fix-deps sha=")) | {created_at, body}' | jq -s .)
-          if jq -e --arg m "<!-- claude-fix-deps sha=$SHA -->" 'any(.body | contains($m))' <<<"$comments" >/dev/null; then
+            --jq '.[] | select(.body | contains("<!-- claude-fix-deps")) | {created_at, body}' | jq -s .)
+          # A commit is seen once either marker is there: claude-fix-deps (a go) or
+          # claude-fix-deps-error (the job itself failed; not counted as a go below).
+          if jq -e --arg a "<!-- claude-fix-deps sha=$SHA -->" --arg b "<!-- claude-fix-deps-error sha=$SHA -->" \
+              'any(.body | contains($a) or contains($b))' <<<"$comments" >/dev/null; then
             skip "このコミットはもう見た"
           fi
           # Goes since a person last took the label 人の手が要る off: that starts the count again.
           since=$(gh api "repos/$GH_REPO/issues/$number/events?per_page=100" --paginate \
             --jq '.[] | select(.event == "unlabeled" and .label.name == "人の手が要る") | .created_at' | sort | tail -1)
-          done_count=$(jq --arg since "${since:-}" '[.[] | select(.created_at > $since)] | length' <<<"$comments")
+          done_count=$(jq --arg since "${since:-}" \
+            '[.[] | select(.created_at > $since and (.body | contains("<!-- claude-fix-deps sha=")))] | length' <<<"$comments")
           attempt=$((done_count + 1))
           echo "attempt=$attempt" >> "$GITHUB_OUTPUT"
           if [ "$attempt" -gt "$MAX" ]; then
@@ -152,7 +156,8 @@ jobs:
       pull-requests: write # comment and label in the last step
       issues: write # create the label
       actions: read # read the failed runs' logs
-      checks: read
+      checks: read # list the failed checks for Claude (its own token cannot)
+      statuses: read
       id-token: write # the action exchanges it for the Claude GitHub App's token
     steps:
       - name: まだ直しにいくかを確かめ直す
@@ -171,13 +176,25 @@ jobs:
           elif jq -e '[.labels[].name] | index("人の手が要る")' <<<"$pr" >/dev/null; then
             stale="すでに人に渡している"
           elif gh api "repos/$GH_REPO/issues/$PR/comments?per_page=100" --paginate --jq '.[].body' |
-              grep -qF "<!-- claude-fix-deps sha=$SHA -->"; then
+              grep -qE "<!-- claude-fix-deps(-error)? sha=$SHA -->"; then
             stale="このコミットはもう見た"
           fi
           if [ -n "${stale:-}" ]; then
             echo "直しにいかない:$stale"
             echo "stale=$stale" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          # The failed checks of the commit, for the prompt: Claude's own token cannot list the
+          # checks (gh pr checks is refused), but can read a run's log with its id.
+          {
+            echo "failed<<FAILED_CHECKS_EOF"
+            gh api "repos/$GH_REPO/commits/$SHA/check-runs?per_page=100" --paginate \
+              --jq '.check_runs[] | select(.conclusion | IN("failure", "timed_out", "startup_failure", "action_required"))
+                | "- \(.name)(\(.conclusion)):\(.details_url)"'
+            gh api "repos/$GH_REPO/commits/$SHA/status?per_page=100" --paginate \
+              --jq '.statuses[] | select(.state | IN("failure", "error")) | "- \(.context)(\(.state)):\(.target_url // "")"'
+            echo "FAILED_CHECKS_EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.gate.outputs.stale == ''
@@ -301,9 +318,12 @@ jobs:
             - Cargo:`cargo update -p <crate> --precise <version>`
             直したかどうかは、push のあとの CI とレビューが確かめます。
 
+            ## このコミットで落ちた検査
+            ${{ steps.gate.outputs.failed }}
+
             ## 手順
             1. リポジトリの `AGENTS.md`・`CLAUDE.md`・`CONTRIBUTING.md` を読み、決まりを知る(無いものは飛ばす)。
-            2. `gh pr view ${{ needs.triage.outputs.pr }} --comments` と `gh api repos/${{ github.repository }}/pulls/${{ needs.triage.outputs.pr }}/comments` で、レビューのまとめと行コメントを読む。`gh pr checks ${{ needs.triage.outputs.pr }}` で落ちた検査を見て、Claude のレビュー以外の落ちた実行は `gh run view <id> --log-failed` で読む。`gh pr diff ${{ needs.triage.outputs.pr }}` で、どの依存をどこからどこへ上げたかを読む。
+            2. `gh pr view ${{ needs.triage.outputs.pr }} --comments` と `gh api repos/${{ github.repository }}/pulls/${{ needs.triage.outputs.pr }}/comments` で、レビューのまとめと行コメントを読む。落ちた検査は下の一覧のとおりです。Claude のレビュー以外で、GitHub Actions のもの(URL が `/actions/runs/<id>/` を含む)は `gh run view <id> --log-failed` で読む。`gh pr diff ${{ needs.triage.outputs.pr }}` で、どの依存をどこからどこへ上げたかを読む。
             3. 止めている理由ごとに、本物かをコードと lock ファイルに戻って確かめ、直す。たとえば次のもの。
                - 更新に合わせて、ソースや設定(`vite.config.ts` など)を直す。
                - 一緒に上げるべき依存を、合う版に上げる(peer の範囲は `npm view <pkg>@<version> peerDependencies` で確かめる)。
@@ -329,7 +349,7 @@ jobs:
             --model ${{ inputs.model }}
             --permission-mode default
             --json-schema '{"type":"object","properties":{"result":{"type":"string","enum":["fixed","needs_human"]},"summary":{"type":"string"}},"required":["result","summary"]}'
-            --allowedTools "Read,Glob,Grep,Edit,Write,Task,Agent,Bash(gh run view:*),Bash(gh pr checks:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh api repos/${{ github.repository }}/pulls/${{ needs.triage.outputs.pr }}/comments),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git add:*),Bash(git commit:*),Bash(git push),Bash(npm view:*),Bash(pnpm install --lockfile-only --ignore-scripts:*),Bash(npm install --package-lock-only --ignore-scripts:*),Bash(cargo update -p:*)"
+            --allowedTools "Read,Glob,Grep,Edit,Write,Task,Agent,Bash(gh run view:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh api repos/${{ github.repository }}/pulls/${{ needs.triage.outputs.pr }}/comments),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git add:*),Bash(git commit:*),Bash(git push),Bash(npm view:*),Bash(pnpm install --lockfile-only --ignore-scripts:*),Bash(npm install --package-lock-only --ignore-scripts:*),Bash(cargo update -p:*)"
             --disallowedTools "Bash(git push --force:*),Bash(git push -f:*),Bash(gh pr edit:*),Bash(gh pr merge:*),Bash(gh pr close:*),Bash(gh pr comment:*),Bash(gh pr create:*)"
 
       # Kept only when Claude ran and exported something. meta.json tells which run, workflow and
@@ -390,6 +410,13 @@ jobs:
           fi
           if [ "$(gh pr view "$PR" --json headRefOid --jq .headRefOid)" != "$SHA" ]; then
             echo "知らせない:直しているあいだに枝が進んだので、新しい検査に任せる"; exit 0
+          fi
+          # The job itself failed before Claude answered (the action refused, a timeout): not a
+          # go, and not the PR's fault. Say so without handing the PR over; the next commit of
+          # the PR is tried again.
+          if [ "$CLAUDE_OUTCOME" != success ] && [ -z "$result" ]; then
+            gh pr comment "$PR" --body "$(printf '<!-- claude-fix-deps-error sha=%s -->\n@%s 依存の更新を直すジョブが、Claude の答えを待たずに失敗しました（%s）。workflow の側の問題かもしれません。実行のログを見てください。\n\n直しにいった回数には数えません。この PR に次のコミットが来たら、また動きます。' "$SHA" "$OWNER" "$RUN_URL")"
+            exit 0
           fi
           if [ "$result" = needs_human ]; then
             why="持ち主の判断が要るか、Claude では直せないものです。"
