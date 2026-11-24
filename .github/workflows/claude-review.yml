@@ -24,10 +24,12 @@ on:
       allowed_bots:
         description: >-
           PR を作ったり push したりしてもレビューするボット(カンマ区切り、`[bot]` は付けなくてよい)。
-          依存の更新の PR を出す Renovate と、claude-fix-ci.yml で CI の直しを push する Claude を既定で入れる。
+          依存の更新の PR を出す Renovate、脆弱性の修正 PR を出す Dependabot、claude-fix-ci.yml で CI の直しを
+          push する Claude を既定で入れる。Dependabot の PR では Dependabot のシークレットしか読めないので、
+          CLAUDE_CODE_OAUTH_TOKEN を Dependabot のシークレットにも入れておく(repo-baseline が入れる)。
           空にすると、ボットの PR や push はレビューしない。
         type: string
-        default: renovate,claude
+        default: renovate,dependabot,claude
       collect_nits:
         description: >-
           直さなくてもマージできるが直す価値のある小さい指摘を、ラベル「あとで直す」の issue に PR ごとにまとめる。

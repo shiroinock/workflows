@@ -5,7 +5,7 @@ shiroinock のリポジトリで共通に使う GitHub Actions の再利用ワ�
 | ワークフロー | すること |
 |---|---|
 | `claude.yml` | オーナーが issue・PR コメント・レビューで `@claude` と書くと Claude Code が動く。ほかの人のメンションでは動かない |
-| `claude-review.yml` | 同じリポジトリのブランチから来た、下書きでない PR を Claude Code がレビューする。ボットの PR や push は `allowed_bots`(既定は Renovate と、CI の直しを push する Claude)に挙げたものだけ。直す指摘が無ければラベル「マージ予約」を付ける。検査 `review / verdict` は、指摘が残っている間は落ちる(必須の検査にする)。直さなくてもマージできるが直す価値のある小さい指摘は、マージを止めずに issue「あとで直す」へ PR ごとにまとめる(`collect_nits: false` で止める。呼ぶ側は `issues: write` を渡す) |
+| `claude-review.yml` | 同じリポジトリのブランチから来た、下書きでない PR を Claude Code がレビューする。ボットの PR や push は `allowed_bots`(既定は Renovate、脆弱性の修正 PR を出す Dependabot、CI の直しを push する Claude)に挙げたものだけ。直す指摘が無ければラベル「マージ予約」を付ける。検査 `review / verdict` は、指摘が残っている間は落ちる(必須の検査にする)。直さなくてもマージできるが直す価値のある小さい指摘は、マージを止めずに issue「あとで直す」へ PR ごとにまとめる(`collect_nits: false` で止める。呼ぶ側は `issues: write` を渡す) |
 | `claude-fix-ci.yml` | PR の CI が落ちたら、Claude Code が原因を読んで枝を直し、push する(CI とレビューが走り直す)。人が直すべきもの、または決めた回数(既定 2 回)で直らないものは、PR で持ち主にメンションし、ラベル「人の手が要る」を付けて止まる。下書きとボットの PR には手を出さない。すべてのワークフローの完了を受け、PR で落ちた実行だけを拾うので、CI の名前を合わせる必要は無い(CI が無ければ何もしない)。Claude のレビュー・アクションの固定・共通の静的ルールは飛ばす(静的ルールは手元の pre-push フックか `rules -- --fix` で直す)。ほかに飛ばしたいものは `skip_workflows` にファイル名を渡す |
 | `merge-reservation.yml` | 「マージ予約」の付いた PR が既定ブランチに向いたら、自動マージ(マージコミット)を入れる。積み重ねた PR は、下の PR がマージされて付け替わるまで待つ |
 | `dept.yml` | [dept](https://github.com/shiroinock/dept) で依存の遅れ(最新版までに出たリリースを major 30 / minor 3 / patch 1 で重み付けした合計)を数え、README に貼るバッジ `dept.svg`、どの依存がどれだけ遅れているかのレポート `dept.md`、結果 `dept.json` をブランチ `dept-badge` に置く。バッジは dept が自分で描き、外部のサービスは使わない。dept はリリースから取り、来歴の attestation を確かめてから使う。調べられなかった依存があれば、前のバッジを上書きせずに失敗する(`allow_errors: true` で置く)。main への push、毎週月曜、手動で走る。マージ予約(GITHUB_TOKEN)のマージは push を出さないので、`merge-reservation.yml` に `ci_workflow` を渡しているリポジトリでは、そのあと dispatch される CI が成功したときにも走る(CI の `name:` が `CI` であること)。`repo-baseline` は、ルートに `pnpm-lock.yaml` か `package-lock.json` があるリポジトリにだけ入れる(公開・非公開を問わない)。README には `[![dept](https://github.com/<owner>/<repo>/raw/dept-badge/dept.svg)](https://github.com/<owner>/<repo>/blob/dept-badge/dept.md)` と書き、クリックでレポートが開くようにする。`github.com/…/raw/…` の形なら、非公開のリポジトリでも読める人には表示される(`raw.githubusercontent.com` は非公開では表示されない) |
@@ -64,10 +64,10 @@ dotfiles では `repo-new`・`repo-baseline` という名前で入っている�
 - `templates/` のうち、まだ無いもの(Renovate の設定を含む。`dept.yml` は、ルートに `pnpm-lock.yaml` か `package-lock.json` があるリポジトリにだけ)。あるものは書き換えない。空のリポジトリには最初のコミットとして入れ、中身のあるリポジトリには PR を出す(`.github/workflows` を変えるので、手で見てマージする)。非公開のリポジトリでは、`merge-reservation.yml` の schedule を外す。
   - 要らないテンプレートは、リポジトリの `.github/baseline-skip` に `templates/` でのファイル名を1行ずつ書く。入れる PR を閉じた(マージしなかった)ときも、その PR のファイルはもう入れない。
   - API のエラーは「無い」「空」とみなさず、その手順を飛ばす。失敗が1つでもあれば 1 で終わる。
-- シークレット `CLAUDE_CODE_OAUTH_TOKEN`:無ければ 1Password から入れる(手元で `op` が使えるときだけ。参照は `CLAUDE_TOKEN_OP_REF` で替えられる)。
-- マージの設定、シークレットスキャン、Dependabot のアラート、ルールセット「main を守る」。
+- シークレット `CLAUDE_CODE_OAUTH_TOKEN`:Actions と Dependabot のそれぞれに、無ければ 1Password から入れる(手元で `op` が使えるときだけ。参照は `CLAUDE_TOKEN_OP_REF` で替えられる)。Dependabot の PR で動く workflow は Dependabot のシークレットしか読めないので、Claude のレビューに両方が要る。
+- マージの設定、シークレットスキャン、Dependabot のアラートと脆弱性の修正 PR(security updates)、ルールセット「main を守る」。
 
-`repo-new` を使わずに作ったリポジトリ(ブラウザ、素の `gh repo create`)は、週に1度の `baseline.yml` が拾って同じものを入れる。ここに足したテンプレートも、これで既存のリポジトリに配られる。トピック `no-baseline` を付けたリポジトリは触らない。動かすには、このリポジトリにシークレット `BASELINE_TOKEN`(オーナーの fine-grained token。すべてのリポジトリに Contents・Pull requests・Workflows・Administration の書き込みと、Secrets の読み取り)を入れる。ここからは `CLAUDE_CODE_OAUTH_TOKEN` を入れられないので、無いリポジトリはログに出るだけ。ログは公開なので、非公開のリポジトリと、読めなかったリポジトリの名前は出さない。
+`repo-new` を使わずに作ったリポジトリ(ブラウザ、素の `gh repo create`)は、週に1度の `baseline.yml` が拾って同じものを入れる。ここに足したテンプレートも、これで既存のリポジトリに配られる。トピック `no-baseline` を付けたリポジトリは触らない。動かすには、このリポジトリにシークレット `BASELINE_TOKEN`(オーナーの fine-grained token。すべてのリポジトリに Contents・Pull requests・Workflows・Administration の書き込みと、Secrets・Dependabot secrets の読み取り)を入れる。ここからは `CLAUDE_CODE_OAUTH_TOKEN` を入れられないので、無いリポジトリはログに出るだけ。ログは公開なので、非公開のリポジトリと、読めなかったリポジトリの名前は出さない。
 
 [Claude の GitHub App](https://github.com/apps/claude) は、「All repositories」で入れておくと、新しいリポジトリにも自動で入る。
 

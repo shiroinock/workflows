@@ -13,10 +13,10 @@
     "enabled": true,
     "schedule": ["before 9am on monday"]
   },
-  "osvVulnerabilityAlerts": true,
+  "osvVulnerabilityAlerts": false,
   "vulnerabilityAlerts": {
-    "labels": ["依存の更新", "セキュリティ"],
-    "minimumReleaseAge": "3 days"
+    "description": "脆弱性の修正 PR は Dependabot の security updates が出す(間接の依存も lock ファイルだけを上げて直せるため)。Renovate からも出すと同じ修正の PR が2つ並ぶ",
+    "enabled": false
   },
   "customManagers": [
     {
@@ -35,7 +35,7 @@
   ],
   "packageRules": [
     {
-      "description": "サプライチェーン攻撃に備え、レジストリの新しい版は公開から7日たってから PR にする。脆弱性の修正は vulnerabilityAlerts で3日に縮める。間接の依存は、各リポジトリの pnpm の minimumReleaseAge(3日)が見る",
+      "description": "サプライチェーン攻撃に備え、レジストリの新しい版は公開から7日たってから PR にする(脆弱性の修正は Dependabot が出し、これを待たない)。間接の依存は、各リポジトリの pnpm の minimumReleaseAge(3日)が見る",
       "matchDatasources": ["npm", "pypi", "crate"],
       "minimumReleaseAge": "7 days",
       "internalChecksFilter": "strict"

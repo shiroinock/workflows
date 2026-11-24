@@ -11,12 +11,12 @@ shiroinock のリポジトリで揃えるツールと版。新しく作るリポ
 | TypeScript | 安定版の最新 | Renovate で上げる |
 | Python | uv、3.13 | `pyproject.toml` の `requires-python` と `.python-version`。ロックファイルは `uv.lock`。lint と整形は Ruff、テストは pytest |
 | 依存の更新 | Renovate | `templates/renovate.json` を置いて共通設定 `renovate/default.json` を読む。`dependabot.yml` は置かない |
-| 脆弱性の報告 | Dependabot のアラート | `repo-baseline`(dotfiles)でオンにする。自動の修正 PR はオフにし、修正の PR は Renovate が出す |
+| 脆弱性の報告と修正 | Dependabot のアラートと security updates | `repo-baseline`(dotfiles)でどちらもオンにする。`dependabot.yml` は置かず、脆弱性の修正 PR だけを Dependabot が出す(間接の依存も lock ファイルだけを上げて直せる)。PR は Renovate のものと同じく Claude のレビューを通り、指摘が無ければ「マージ予約」で自動マージされる |
 
 ## Renovate の共通設定
 
 - 毎週月曜の朝に、minor と patch を1つの PR にまとめて出す。GitHub Actions は別の PR にまとめる。
-- 脆弱性の修正は予定を待たずにすぐ出し、ラベル「セキュリティ」を付ける。
+- 脆弱性の修正は出さない(Dependabot が出す。同じ修正の PR が2つ並ばないように)。
 - Node と Python の大きな版上げは出さない。全リポジトリで揃えて、手で上げる。
 - Renovate 自身は自動マージしない。PR は Claude のレビューを通り、指摘が無ければ「マージ予約」で自動マージされる。
 

@@ -7,7 +7,7 @@
 #
 # BASELINE_TOKEN: a fine-grained token of the owner on all repositories with write access to
 # Contents, Pull requests and Workflows, Administration for the settings and the ruleset, and read
-# access to Secrets to report a missing CLAUDE_CODE_OAUTH_TOKEN. Without it nothing runs. The job
+# access to Secrets and Dependabot secrets to report a missing CLAUDE_CODE_OAUTH_TOKEN. Without it nothing runs. The job
 # fails when any step failed (an expired token shows up as a red run). CLAUDE_CODE_OAUTH_TOKEN is not set from here (1Password is not reachable);
 # a repository without it is only reported. The log is public, so private repositories are not named.
 name: 共通の設定を入れる

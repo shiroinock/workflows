@@ -11,11 +11,14 @@
 #     空のリポジトリには最初のコミットとして入れ、中身のあるリポジトリには PR を出す。
 #     リポジトリの .github/baseline-skip に書いたテンプレート(1行に1つ、templates/ のファイル名)と、
 #     閉じた(マージしなかった)PR に入っていたファイルは、もう入れない。
-#   - シークレット CLAUDE_CODE_OAUTH_TOKEN:無ければ 1Password から入れる(op が使えるときだけ)。
+#   - シークレット CLAUDE_CODE_OAUTH_TOKEN:Actions と Dependabot のそれぞれに、無ければ 1Password から入れる
+#     (op が使えるときだけ)。Dependabot の PR で動く workflow は Dependabot のシークレットしか読めないので、
+#     Claude のレビューに両方が要る。
 #   - マージ方法はマージコミットのみ(スカッシュとリベースは無効)
 #   - 自動マージを許可、マージ後にブランチを自動削除、「Update branch」ボタンを出す
 #   - シークレットスキャンと push protection(使えないプランでは飛ばす)
-#   - Dependabot の脆弱性アラートをオン。自動の修正 PR はオフ(修正の PR は Renovate が出す)
+#   - Dependabot の脆弱性アラートと、その修正 PR(security updates)をオン。ふだんの版上げは Renovate が出し、
+#     脆弱性の修正だけを Dependabot が出す(間接の依存も lock ファイルだけを上げて直せるため)
 #   - ルールセット「main を守る」: デフォルトブランチの削除と force push を禁止し、PR を必須にする
 #     (承認は 0 人、マージコミットのみ)。同名のルールセットが既にあれば触らない。
 #     空のリポジトリに最初のコミットを入れたあとで作る。
@@ -283,30 +286,51 @@ $(for t in "${files[@]}"; do echo "- \`$(dest_of "$(basename "$t")")\`"; done)
   fi
 }
 
-secret_step() { # <full>
-  local full=$1 value names
-  if ! names=$(gh secret list -R "$full" --json name --jq '.[].name' 2>/dev/null); then
-    fail "   シークレット: あるか確かめられなかった(トークンに Secrets の読み取りがあるか)"
-    return
-  fi
-  if grep -qx CLAUDE_CODE_OAUTH_TOKEN <<<"$names"; then
-    echo "   シークレット: CLAUDE_CODE_OAUTH_TOKEN はある"
-    return
-  fi
+# The token is read from 1Password at most once per run, and only when a repository lacks it.
+claude_token=""
+claude_token_state=unread # unread, ok, none (no op), failed
+read_claude_token() {
+  [ "$claude_token_state" = unread ] || return
   if ! command -v op > /dev/null; then
-    echo "   シークレット: CLAUDE_CODE_OAUTH_TOKEN が無い(op が無いので入れていない)"
-    return
-  fi
-  if ! value=$(op read "$CLAUDE_TOKEN_OP_REF" 2>/dev/null) || [ -z "$value" ]; then
-    echo "   シークレット: CLAUDE_CODE_OAUTH_TOKEN が無い(1Password から読めなかった: CLAUDE_TOKEN_OP_REF を確かめる)"
-    return
-  fi
-  if printf '%s' "$value" | gh secret set CLAUDE_CODE_OAUTH_TOKEN -R "$full" > /dev/null 2>&1; then
-    echo "   シークレット: CLAUDE_CODE_OAUTH_TOKEN を入れた"
+    claude_token_state=none
+  elif claude_token=$(op read "$CLAUDE_TOKEN_OP_REF" 2>/dev/null) && [ -n "$claude_token" ]; then
+    claude_token_state=ok
   else
-    fail "   シークレット: CLAUDE_CODE_OAUTH_TOKEN を入れられなかった"
+    claude_token_state=failed
   fi
-  value=""
+}
+
+# Actions secrets for ordinary runs; Dependabot secrets for runs on Dependabot's PRs, which read
+# no others.
+secret_step() { # <full>
+  local full=$1 app label names
+  for app in actions dependabot; do
+    label="シークレット($app)"
+    if ! names=$(gh secret list -R "$full" --app "$app" --json name --jq '.[].name' 2>/dev/null); then
+      fail "   $label: あるか確かめられなかった(トークンに Secrets の読み取りがあるか)"
+      continue
+    fi
+    if grep -qx CLAUDE_CODE_OAUTH_TOKEN <<<"$names"; then
+      echo "   $label: CLAUDE_CODE_OAUTH_TOKEN はある"
+      continue
+    fi
+    read_claude_token
+    case "$claude_token_state" in
+      none)
+        echo "   $label: CLAUDE_CODE_OAUTH_TOKEN が無い(op が無いので入れていない)"
+        continue
+        ;;
+      failed)
+        echo "   $label: CLAUDE_CODE_OAUTH_TOKEN が無い(1Password から読めなかった: CLAUDE_TOKEN_OP_REF を確かめる)"
+        continue
+        ;;
+    esac
+    if printf '%s' "$claude_token" | gh secret set CLAUDE_CODE_OAUTH_TOKEN -R "$full" --app "$app" > /dev/null 2>&1; then
+      echo "   $label: CLAUDE_CODE_OAUTH_TOKEN を入れた"
+    else
+      fail "   $label: CLAUDE_CODE_OAUTH_TOKEN を入れられなかった"
+    fi
+  done
 }
 
 hide=false
@@ -362,11 +386,13 @@ JSON
     echo "   シークレットスキャン: このプランでは使えない"
   fi
 
-  if gh api -X PUT "repos/$full/vulnerability-alerts" --silent 2>/dev/null; then
-    gh api -X DELETE "repos/$full/automated-security-fixes" --silent 2>/dev/null
-    echo "   Dependabot アラート: オン(自動の修正 PR はオフ)"
-  else
+  # Security updates need the alerts on first.
+  if ! gh api -X PUT "repos/$full/vulnerability-alerts" --silent 2>/dev/null; then
     fail "   Dependabot アラート: 失敗"
+  elif gh api -X PUT "repos/$full/automated-security-fixes" --silent 2>/dev/null; then
+    echo "   Dependabot アラート: オン(修正 PR もオン)"
+  else
+    fail "   Dependabot アラート: オン(修正 PR をオンにできなかった)"
   fi
 
   existing=$(gh api "repos/$full/rulesets" --jq ".[] | select(.name==\"$RULESET_NAME\") | .id" 2>/dev/null || true)
@@ -378,6 +404,7 @@ JSON
     fail "   ルールセット: 失敗 — $(detail "$out")"
   fi
 done
+claude_token=""
 
 if [ "$failures" -gt 0 ]; then
   echo "失敗が $failures 件あった(上を見る)"
