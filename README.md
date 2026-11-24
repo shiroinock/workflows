@@ -62,7 +62,7 @@ nix run github:shiroinock/workflows#repo-baseline -- <名前> ...           # �
 
 dotfiles では `repo-new`・`repo-baseline` という名前で入っている。`repo-baseline` は何度流してもよく、次を入れる。
 
-- `templates/` のうち、まだ無いもの(Renovate の設定を含む。`dept.yml` は、ルートに `pnpm-lock.yaml` か `package-lock.json` があるリポジトリにだけ)。あるものは書き換えない。ただし、テンプレートの行に付けた zizmor の ignore のコメント(`@main` を追うこと、`pull_request_target` などの起動条件を使うことを、理由を書いて抑えるもの)は、すでにある写しの同じ行にも足す。足すのは同じ共通のジョブを呼ぶ写し(テンプレートの `uses: shiroinock/workflows/…@` の行があるもの。SHA で固定していてもよい)だけで、リポジトリが書き換えた行には触らない。空のリポジトリには最初のコミットとして入れ、中身のあるリポジトリには PR を出す(`.github/workflows` を変えるので、手で見てマージする)。非公開のリポジトリでは、`merge-reservation.yml` の schedule を外す。
+- `templates/` のうち、まだ無いもの(Renovate の設定を含む。`dept.yml` は、ルートに `pnpm-lock.yaml` か `package-lock.json` があるリポジトリにだけ)。あるものは書き換えない。ただし、テンプレートの行に付けた zizmor の ignore のコメント(`@main` を追うこと、`pull_request_target` などの起動条件を使うことを、理由を書いて抑えるもの)は、すでにある写しの同じ行にも足す。足すのは同じ共通のジョブを呼ぶ写し(テンプレートの `uses: shiroinock/workflows/…@` の行があるもの。SHA で固定していてもよい)だけで、リポジトリが書き換えた行には触らない。空のリポジトリには最初のコミットとして入れ、中身のあるリポジトリには PR を出す(`.github/workflows` を変えるので、手で見てマージする)。その PR が開いたままなら、見回りのたびに今の既定ブランチの上で今のテンプレートに合わせて作り直す(中身が同じなら触らない。PR のブランチで写しを書き換えても戻る)。PR がテンプレートの置き場所のほかのファイル(`.github/baseline-skip` など)を変えていれば、人の手が入ったものとして触らない。非公開のリポジトリでは、`merge-reservation.yml` の schedule を外す。
   - 要らないテンプレートは、リポジトリの `.github/baseline-skip` に `templates/` でのファイル名を1行ずつ書く。入れる PR を閉じた(マージしなかった)ときも、その PR のファイルはもう入れない。
   - API のエラーは「無い」「空」とみなさず、その手順を飛ばす。失敗が1つでもあれば 1 で終わる。
 - シークレット `CLAUDE_CODE_OAUTH_TOKEN`:無ければ 1Password から入れる(手元で `op` が使えるときだけ。参照は `CLAUDE_TOKEN_OP_REF` で替えられる)。
