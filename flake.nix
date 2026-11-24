@@ -24,6 +24,9 @@
           pkgs.renovate
           pkgs.nodejs_24
           pkgs.ast-grep
+          pkgs.gawk
+          pkgs.gnused
+          pkgs.diffutils
         ];
         # The shared ast-grep rules, run on the current directory. `--fix` applies the fixes.
         # Rule ids listed in .github/static-rules-off (one per line, # starts a comment) are off.
@@ -55,7 +58,26 @@
             echo "== actionlint (with shellcheck)"
             actionlint .github/workflows/*.yml templates/*.yml
             echo "== zizmor"
-            zizmor --offline --no-progress .github/workflows templates
+            # A directory other than .github/workflows yields nothing to zizmor; name the templates.
+            zizmor --offline --no-progress .github/workflows templates/*.yml
+            echo "== zizmor-ignores.awk: a copy gets the comments back, once; other files are left alone"
+            for t in templates/*.yml; do
+              sed -E 's/ +# zizmor: ignore\[.*$//' "$t" > "$HOME/bare.yml"
+              awk -f scripts/zizmor-ignores.awk "$t" "$HOME/bare.yml" > "$HOME/out.yml"
+              diff -u "$t" "$HOME/out.yml"
+              if awk -f scripts/zizmor-ignores.awk "$t" "$t" > "$HOME/out.yml"; then
+                echo "$t: コメントがすでにあるのに、足したことになった"
+                exit 1
+              fi
+              diff -u "$t" "$HOME/out.yml"
+              # Not a copy: the same lines, without the template's uses: line.
+              grep -v 'uses: shiroinock/workflows/' "$HOME/bare.yml" > "$HOME/other.yml"
+              if awk -f scripts/zizmor-ignores.awk "$t" "$HOME/other.yml" > "$HOME/out.yml"; then
+                echo "$t: 写しでないファイルにコメントを足した"
+                exit 1
+              fi
+              diff -u "$HOME/other.yml" "$HOME/out.yml"
+            done
             echo "== pinact: actions pinned to a commit"
             pinact run --check
             echo "== renovate-config-validator"
@@ -87,6 +109,7 @@
           bashOptions = [ ];
           text = ''
             export TEMPLATES_DIR="''${TEMPLATES_DIR:-${./templates}}"
+            export ZIZMOR_IGNORES_AWK="''${ZIZMOR_IGNORES_AWK:-${./scripts/zizmor-ignores.awk}}"
             ${builtins.readFile ./scripts/repo-baseline.sh}
           '';
         };
