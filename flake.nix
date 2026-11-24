@@ -104,7 +104,6 @@
             pkgs.coreutils
             pkgs.gnugrep
             pkgs.gawk
-            pkgs.diffutils
           ];
           # op (1Password CLI) comes from PATH when it is there; without it the secret is skipped.
           bashOptions = [ ];
