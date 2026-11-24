@@ -90,6 +90,23 @@
             ${builtins.readFile ./scripts/repo-baseline.sh}
           '';
         };
+        # Checks the hashes of fixed-output derivations (npmDepsHash and the like) against the
+        # lockfiles; `--fix` writes the right ones. nix itself comes from PATH.
+        nix-hashes = pkgs.writeShellApplication {
+          name = "nix-hashes";
+          runtimeInputs = [
+            pkgs.git
+            pkgs.gnused
+            pkgs.gawk
+            pkgs.gnugrep
+            pkgs.coreutils
+          ];
+          bashOptions = [
+            "nounset"
+            "pipefail"
+          ];
+          text = builtins.readFile ./scripts/nix-hashes.sh;
+        };
         repo-new = pkgs.writeShellApplication {
           name = "repo-new";
           runtimeInputs = [
@@ -113,6 +130,9 @@
         packages.pinact = pkgs.pinact;
         # Called by .github/workflows/static-rules.yml in other repositories, and locally.
         packages.rules = rules;
+        # Called by .github/workflows/nix-hashes.yml in other repositories, and locally.
+        packages.nix-hashes = nix-hashes;
+        apps.nix-hashes = flake-utils.lib.mkApp { drv = nix-hashes; };
         apps.rules = flake-utils.lib.mkApp { drv = rules; };
         apps.default = flake-utils.lib.mkApp { drv = lint; };
 

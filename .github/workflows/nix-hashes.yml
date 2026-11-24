@@ -1,0 +1,48 @@
+# Reusable: fails a PR when a hash of a fixed-output derivation in the flake (npmDepsHash,
+# cargoHash, vendorHash, the pnpm deps and the like) no longer matches the lockfile. Renovate
+# changes package-lock.json, Cargo.lock or go.sum but not the hash in flake.nix, so `nix build`
+# breaks after such a PR is merged unless something checks it. Nothing is pushed: fix it locally
+# with `nix run github:shiroinock/workflows#nix-hashes -- --fix <installables>`.
+#
+# The runner's store starts empty, so every fixed-output derivation is fetched and its hash
+# compared. nix-hashes comes from this repository's flake at workflows_ref.
+name: Nix のハッシュ
+
+on:
+  workflow_call:
+    inputs:
+      installables:
+        description: >-
+          確かめる installable(空白区切り)。固定出力そのもの(例 ".#default.npmDeps"、
+          ".#default.cargoDeps"、".#default.goModules")を渡すと、取ってくるだけで済むので速い。
+          パッケージ(".#default")を渡すと、ビルドそのものも確かめる。
+        type: string
+        default: .#default
+      workflows_ref:
+        description: >-
+          nix-hashes を取ってくる shiroinock/workflows の版。この workflow を SHA で呼ぶときは、
+          同じ SHA を渡す。
+        type: string
+        default: main
+
+permissions: {}
+
+jobs:
+  hashes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read # check out the repository
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+      - name: 固定出力のハッシュを確かめる
+        env:
+          REF: ${{ inputs.workflows_ref }}
+          INSTALLABLES: ${{ inputs.installables }}
+        run: |
+          # Split on spaces on purpose: one installable per word.
+          # shellcheck disable=SC2086
+          nix run "github:shiroinock/workflows/$REF#nix-hashes" -- $INSTALLABLES
