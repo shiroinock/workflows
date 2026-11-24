@@ -270,6 +270,9 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allow_fork_prs: 'false'
+          # The action refuses a run that a bot started unless the bot is listed here; the runs
+          # this job answers are the dependency bots' own.
+          allowed_bots: ${{ inputs.bots }}
           additional_permissions: |
             actions: read
           prompt: |
