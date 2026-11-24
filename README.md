@@ -11,6 +11,32 @@ shiroinock のリポジトリで共通に使う GitHub Actions の再利用ワ�
 | `dept.yml` | [dept](https://github.com/shiroinock/dept) で依存の遅れ(最新版までに出たリリースを major 30 / minor 3 / patch 1 で重み付けした合計)を数え、README に貼るバッジ `dept.svg`、どの依存がどれだけ遅れているかのレポート `dept.md`、結果 `dept.json` をブランチ `dept-badge` に置く。バッジは dept が自分で描き、外部のサービスは使わない。dept はリリースから取り、来歴の attestation を確かめてから使う。調べられなかった依存があれば、前のバッジを上書きせずに失敗する(`allow_errors: true` で置く)。main への push、毎週月曜、手動で走る。マージ予約(GITHUB_TOKEN)のマージは push を出さないので、`merge-reservation.yml` に `ci_workflow` を渡しているリポジトリでは、そのあと dispatch される CI が成功したときにも走る(CI の `name:` が `CI` であること)。`repo-baseline` は、ルートに `pnpm-lock.yaml` か `package-lock.json` があるリポジトリにだけ入れる(公開・非公開を問わない)。README には `[![dept](https://github.com/<owner>/<repo>/raw/dept-badge/dept.svg)](https://github.com/<owner>/<repo>/blob/dept-badge/dept.md)` と書き、クリックでレポートが開くようにする。`github.com/…/raw/…` の形なら、非公開のリポジトリでも読める人には表示される(`raw.githubusercontent.com` は非公開では表示されない) |
 | `pinact.yml` | 1つのジョブで2つを確かめ、引っかかる PR を落とす(`pinact / pinact`。必須の検査にする)。(1) アクションを SHA で固定していないもの(pinact)。(2) 共通の静的ルール(`static-rules/` の ast-grep のルール)に引っかかるコード。push はしない。手元で `pinact run` と `nix run github:shiroinock/workflows#rules -- --fix` を流すと直る。外したい静的ルールは `.github/static-rules-off` に書く。どちらも数秒で終わるので、非公開のリポジトリで1ジョブ1分と数えられる分を1つで済ませる |
 | `static-rules.yml` | 使わない。静的ルールは `pinact.yml` のジョブで流す。まだ呼んでいるリポジトリが壊れないよう残してあり、ジョブは飛ばす(飛ばしたジョブは数えられない)。呼ぶ側の `.github/workflows/static-rules.yml` は消してよい。`pinact.yml` を呼ばないリポジトリでは `standalone: true` を渡すと、これまでどおりここで流す |
+| `nix-hashes.yml` | flake の固定出力のハッシュ(`npmDepsHash`・`cargoHash`・`vendorHash`・pnpm の依存など)が、ロックファイルとずれている PR を落とす(`hashes / hashes`)。Renovate はロックファイルだけを上げて `flake.nix` のハッシュを直さないので、そのままマージすると `nix build` が壊れる。push はしない。手元で `nix run github:shiroinock/workflows#nix-hashes -- --fix <installable>` を流すと、`*.nix` の値を書き換える。`installables` には固定出力そのもの(例 `.#default.npmDeps`)を渡すと速い(既定 `.#default` はビルドまでする)。`flake.nix` のあるリポジトリにだけ、手で置く(テンプレートは無い)。呼ぶ側の例は下 |
+
+### `nix-hashes.yml` の呼び方
+
+`flake.nix` で `buildNpmPackage` などを使うリポジトリの `.github/workflows/nix-hashes.yml` に置き、`hashes / hashes` を必須の検査にする。
+
+```yaml
+name: Nix のハッシュ
+
+on:
+  # Every PR: a required check has to report on all of them.
+  pull_request:
+
+permissions: {}
+
+jobs:
+  hashes:
+    uses: shiroinock/workflows/.github/workflows/nix-hashes.yml@<SHA>
+    permissions:
+      contents: read
+    with:
+      installables: .#default.npmDeps
+      workflows_ref: <SHA> # the same SHA as the uses: line above
+```
+
+手元では、古い固定出力がストアに残っていると `nix build` がハッシュを確かめ直さず通ってしまう。`nix-hashes --fix` は、通ったあとに `--rebuild` で取り直して確かめる。
 
 ## 入れ方
 
