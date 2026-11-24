@@ -50,11 +50,27 @@ permissions: {}
 jobs:
   # Finds the PR the finished run belongs to, and decides whether to try. Nothing from the branch
   # runs here.
+  #
+  # The decision is made when the last check of the commit finishes, and that one may succeed
+  # after another failed, so a finished run is not left out for succeeding. Left out before the
+  # job starts (a private repository bills every job started as at least a minute, and every
+  # workflow of a dependency PR finishes here) are only the runs that cannot be that last one:
+  # - cancelled (a newer push replaced it; that push's runs decide) and skipped (it ends at once);
+  # - a success of the shared checks that take seconds (pinact.yml with the shared static rules,
+  #   the former static-rules.yml, nix-hashes.yml): the CI and the review finish after them. If
+  #   one of them ever does finish last after a failure, that commit is not taken here; the next
+  #   push or a re-run of a check takes it.
   triage:
     if: >-
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
-      startsWith(github.event.workflow_run.head_branch, inputs.branch_prefix)
+      startsWith(github.event.workflow_run.head_branch, inputs.branch_prefix) &&
+      github.event.workflow_run.conclusion != 'cancelled' &&
+      github.event.workflow_run.conclusion != 'skipped' &&
+      !(github.event.workflow_run.conclusion == 'success' && (
+        contains(github.event.workflow_run.path, '/pinact.yml') ||
+        contains(github.event.workflow_run.path, '/static-rules.yml') ||
+        contains(github.event.workflow_run.path, '/nix-hashes.yml')))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
