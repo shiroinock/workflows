@@ -282,7 +282,7 @@ jobs:
 
             ## 手順
             1. リポジトリの `AGENTS.md`・`CLAUDE.md`・`CONTRIBUTING.md` を読み、決まりと確かめ方を知る(無いものは飛ばす)。
-            2. `gh run view ${{ github.event.workflow_run.id }} --log-failed` で、落ちたところを読む。同じコミットでほかのワークフローも落ちていることがあるので、`gh pr checks ${{ needs.triage.outputs.pr }}` で落ちた検査を見て、Claude のレビュー(`claude-code-review.yml`)・アクションの固定(`pinact.yml`)・共通の静的ルール(`static-rules.yml`)と、このリポジトリが外したワークフロー(`${{ inputs.skip_workflows }}`。空なら無し)以外の落ちた実行も `gh run view <id> --log-failed` で読み、まとめて直す(1回の push で済ませる)。`gh pr view ${{ needs.triage.outputs.pr }}` と `gh pr diff ${{ needs.triage.outputs.pr }}` で、PR が何をしようとしているかを読む。
+            2. `gh run view ${{ github.event.workflow_run.id }} --log-failed` で、落ちたところを読む。同じコミットでほかのワークフローも落ちていることがあるので、`gh pr checks ${{ needs.triage.outputs.pr }}` で落ちた検査を見て、Claude のレビュー(`claude-code-review.yml`)・アクションの固定と共通の静的ルール(`pinact.yml`、以前の `static-rules.yml`)と、このリポジトリが外したワークフロー(`${{ inputs.skip_workflows }}`。空なら無し)以外の落ちた実行も `gh run view <id> --log-failed` で読み、まとめて直す(1回の push で済ませる)。`gh pr view ${{ needs.triage.outputs.pr }}` と `gh pr diff ${{ needs.triage.outputs.pr }}` で、PR が何をしようとしているかを読む。
             3. 原因を決める。PR の変更が原因で、PR の目的を変えずに直せるなら直す。必要なら依存を入れ(ロックファイルに合わせて `npm ci` か `pnpm install --frozen-lockfile`)、落ちた検査を手元で流して、通ることを確かめる。
             4. 次のときは直さず、`needs_human` で返す。
                - 直し方が PR の目的や設計の判断にかかわる。
