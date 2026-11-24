@@ -51,6 +51,11 @@
       "groupName": "GitHub Actions"
     },
     {
+      "description": "major の版上げは PR を出さず、Dependency Dashboard の一覧に載せるだけにする。上げたいときに、そこでチェックを入れると PR が出る。major は合う合わないの判断が要ることが多く、自動で出すと止まった PR が溜まるため",
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    },
+    {
       "description": "Node の大きな版上げは、全リポジトリで揃えて手で上げる",
       "matchDepNames": ["node", "nodejs", "@types/node"],
       "matchUpdateTypes": ["major"],

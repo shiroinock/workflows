@@ -78,7 +78,7 @@ jobs:
       # this receiver, which only appends what it gets to a file on the runner; the file is kept as
       # the artifact claude-usage-<job>-<attempt> below. Prompts, replies and tool input are not in
       # it: Claude Code redacts them unless told otherwise. Same steps in claude.yml,
-      # claude-review.yml and claude-fix-ci.yml.
+      # claude-review.yml, claude-fix-ci.yml and claude-fix-deps.yml.
       - name: Claude の使用量を受け取る口を開く
         env:
           OUT: ${{ runner.temp }}/claude-usage

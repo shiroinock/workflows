@@ -6,7 +6,8 @@ shiroinock のリポジトリで共通に使う GitHub Actions の再利用ワ�
 |---|---|
 | `claude.yml` | オーナーが issue・PR コメント・レビューで `@claude` と書くと Claude Code が動く。ほかの人のメンションでは動かない |
 | `claude-review.yml` | 同じリポジトリのブランチから来た、下書きでない PR を Claude Code がレビューする。ボットの PR や push は `allowed_bots`(既定は Renovate と、CI の直しを push する Claude)に挙げたものだけ。直す指摘が無ければラベル「マージ予約」を付ける。検査 `review / verdict` は、指摘が残っている間は落ちる(必須の検査にする)。直さなくてもマージできるが直す価値のある小さい指摘は、マージを止めずに issue「あとで直す」へ PR ごとにまとめる(`collect_nits: false` で止める。呼ぶ側は `issues: write` を渡す) |
-| `claude-fix-ci.yml` | PR の CI が落ちたら、Claude Code が原因を読んで枝を直し、push する(CI とレビューが走り直す)。人が直すべきもの、または決めた回数(既定 2 回)で直らないものは、PR で持ち主にメンションし、ラベル「人の手が要る」を付けて止まる。下書きとボットの PR には手を出さない。すべてのワークフローの完了を受け、PR で落ちた実行だけを拾うので、CI の名前を合わせる必要は無い(CI が無ければ何もしない)。Claude のレビュー・アクションの固定・共通の静的ルールは飛ばす(静的ルールは手元の pre-push フックか `rules -- --fix` で直す)。ほかに飛ばしたいものは `skip_workflows` にファイル名を渡す |
+| `claude-fix-ci.yml` | PR の CI が落ちたら、Claude Code が原因を読んで枝を直し、push する(CI とレビューが走り直す)。人が直すべきもの、または決めた回数(既定 2 回)で直らないものは、PR で持ち主にメンションし、ラベル「人の手が要る」を付けて止まる。下書きとボットの PR には手を出さない(依存の更新のボットの PR は `claude-fix-deps.yml` が扱う)。すべてのワークフローの完了を受け、PR で落ちた実行だけを拾うので、CI の名前を合わせる必要は無い(CI が無ければ何もしない)。Claude のレビュー・アクションの固定・共通の静的ルールは飛ばす(静的ルールは手元の pre-push フックか `rules -- --fix` で直す)。ほかに飛ばしたいものは `skip_workflows` にファイル名を渡す |
+| `claude-fix-deps.yml` | 依存の更新のボット(既定は Renovate)の PR が、Claude のレビューの指摘か CI の失敗で止まったら、Claude Code が枝を直して push し、CI とレビューに確かめさせる。ソースや設定を更新に合わせる、一緒に上げるべき依存を上げる、SDK が決める版を外れた依存を戻す、など手を動かすことだけをする。「この更新を見送るか」の判断と、直せないもの(ネイティブの道具で作るファイル、workflow や Renovate の設定の変更)は、選べる道を書いて持ち主にメンションし、ラベル「人の手が要る」を付けて止まる。決めた回数(既定 2 回)で進まないときも同じ。枝のパッケージのコードは動かさない(依存を入れない・テストもビルドも流さない。公開されて間もないパッケージの中身を Claude のトークンのそばで動かさないため)。lock ファイルは、レジストリの情報だけを読むコマンド(`pnpm install --lockfile-only --ignore-scripts` など)で作り直す。PR のコミットの最後の検査が終わったときに1度だけ動く |
 | `merge-reservation.yml` | 「マージ予約」の付いた PR が既定ブランチに向いたら、自動マージ(マージコミット)を入れる。積み重ねた PR は、下の PR がマージされて付け替わるまで待つ |
 | `dept.yml` | [dept](https://github.com/shiroinock/dept) で依存の遅れ(最新版までに出たリリースを major 30 / minor 3 / patch 1 で重み付けした合計)を数え、README に貼るバッジ `dept.svg`、どの依存がどれだけ遅れているかのレポート `dept.md`、結果 `dept.json` をブランチ `dept-badge` に置く。バッジは dept が自分で描き、外部のサービスは使わない。dept はリリースから取り、来歴の attestation を確かめてから使う。調べられなかった依存があれば、前のバッジを上書きせずに失敗する(`allow_errors: true` で置く)。main への push、毎週月曜、手動で走る。マージ予約(GITHUB_TOKEN)のマージは push を出さないので、`merge-reservation.yml` に `ci_workflow` を渡しているリポジトリでは、そのあと dispatch される CI が成功したときにも走る(CI の `name:` が `CI` であること)。`repo-baseline` は、ルートに `pnpm-lock.yaml` か `package-lock.json` があるリポジトリにだけ入れる(公開・非公開を問わない)。README には `[![dept](https://github.com/<owner>/<repo>/raw/dept-badge/dept.svg)](https://github.com/<owner>/<repo>/blob/dept-badge/dept.md)` と書き、クリックでレポートが開くようにする。`github.com/…/raw/…` の形なら、非公開のリポジトリでも読める人には表示される(`raw.githubusercontent.com` は非公開では表示されない) |
 | `static-rules.yml` | 共通の静的ルール(`static-rules/` の ast-grep のルール)に引っかかるコードのある PR を落とす(`rules / rules`)。push はしない。手元で `nix run github:shiroinock/workflows#rules -- --fix` を流すと直せるものは直る。外したいルールは `.github/static-rules-off` に書く |
@@ -99,7 +100,7 @@ Claude のレビュー(PR ごとにトークンを使う)が繰り返し出す�
 
 ## Claude の使用量
 
-`claude.yml`・`claude-review.yml`・`claude-fix-ci.yml` は、Claude Code が使った量を artifact `claude-usage-<ジョブ>-<試行>` に残す(90 日)。サブスクのクオータのうち、Action がどれだけ食っているかを見る参考にする。
+`claude.yml`・`claude-review.yml`・`claude-fix-ci.yml`・`claude-fix-deps.yml` は、Claude Code が使った量を artifact `claude-usage-<ジョブ>-<試行>` に残す(90 日)。サブスクのクオータのうち、Action がどれだけ食っているかを見る参考にする。
 
 - Claude Code の OpenTelemetry の出力(OTLP の http/json)を、ランナーの中だけで受ける小さな口(Python の標準ライブラリ)に送らせ、受けたものをそのまま1行ずつ `otel.jsonl` に書く。外へは送らない。
 - 入るもの:リクエストごとのモデル・入力と出力のトークン・キャッシュの読み書き・API 料金に換算した費用(`claude_code.api_request`)、トークンと費用のメトリクス、ツールの名前と成否。`meta.json` に、リポジトリ・workflow・ジョブ・実行・PR か issue の番号を書く。
