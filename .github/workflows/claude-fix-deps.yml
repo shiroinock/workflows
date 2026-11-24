@@ -415,8 +415,8 @@ jobs:
           # The job failed before Claude ran at all (the action refused, setup broke): nothing was
           # spent on the PR, and it is not the PR's fault. Say so without counting a go or handing
           # the PR over; the next commit of the PR is tried again. Told by the usage receiver
-          # having got nothing. Once Claude ran (even into a timeout), it is a go as before, so
-          # max_attempts still stops a PR that keeps failing.
+          # having got nothing. Once Claude ran (even into a timeout), it is a go as before: the
+          # marker counts it, and the PR is handed over with 人の手が要る below.
           if [ "$CLAUDE_OUTCOME" != success ] && [ "$CLAUDE_USED" != true ]; then
             gh pr comment "$PR" --body "$(printf '<!-- claude-fix-deps-error sha=%s -->\n@%s 依存の更新を直すジョブが、Claude が動く前に失敗しました（%s）。workflow の側の問題かもしれません。実行のログを見てください。\n\n直しにいった回数には数えません。この PR に次のコミットが来たら、また動きます。' "$SHA" "$OWNER" "$RUN_URL")"
             exit 0
