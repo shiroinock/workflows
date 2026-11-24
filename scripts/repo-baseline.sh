@@ -369,8 +369,10 @@ JSON
     fail "   Dependabot アラート: 失敗"
   fi
 
-  existing=$(gh api "repos/$full/rulesets" --jq ".[] | select(.name==\"$RULESET_NAME\") | .id" 2>/dev/null || true)
-  if [ -n "$existing" ]; then
+  # A failed listing is not "none": creating then could make a second ruleset of the same name.
+  if ! existing=$(gh api "repos/$full/rulesets" --jq ".[] | select(.name==\"$RULESET_NAME\") | .id" 2>&1); then
+    fail "   ルールセット: 一覧を読めなかったので触らない — $(detail "$existing")"
+  elif [ -n "$existing" ]; then
     echo "   ルールセット: 既にある(id $existing)ので触らない"
   elif out=$(gh api -X POST "repos/$full/rulesets" --input - <<<"$ruleset_body" 2>&1); then
     echo "   ルールセット: 作成"
