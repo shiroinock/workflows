@@ -6,7 +6,7 @@
 # 入れるもの:
 #   - 共通のワークフロー:templates/ のうち、まだ無いもの(Renovate の設定もここ)。あるものは書き換えない。
 #     ただし、テンプレートの行に付けた zizmor の ignore のコメントは、すでにある写しの同じ行にも足す
-#     (scripts/zizmor-ignores.awk。リポジトリが書き換えた行には触らない)。足すものがあれば同じ PR に入れる。
+#     (scripts/zizmor-ignores.awk。テンプレートと同じ共通のジョブを呼ぶ写しだけで、書き換えた行には触らない)。足すものがあれば同じ PR に入れる。
 #     dept.yml は、ルートに dept が読めるロックファイル(pnpm-lock.yaml か package-lock.json)がある
 #     リポジトリにだけ入れる(無いと毎回失敗するため)。
 #     非公開のリポジトリでは、merge-reservation.yml の schedule を外す(Actions の無料枠を食うため)。
@@ -192,8 +192,8 @@ workflows_step() { # <full> <private> <default branch> <empty>
           return
         fi
         mkdir -p "$work/updated/$(dirname "$dest")"
-        awk -f "$ZIZMOR_IGNORES_AWK" "$t" "$work/current" > "$work/updated/$dest"
-        cmp -s "$work/current" "$work/updated/$dest" || updated+=("$dest")
+        # Exits 0 only when it added a comment; a copy of another origin is left alone.
+        awk -f "$ZIZMOR_IGNORES_AWK" "$t" "$work/current" > "$work/updated/$dest" && updated+=("$dest")
         continue
       fi
       if [ "$r" = 2 ]; then

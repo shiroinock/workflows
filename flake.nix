@@ -60,11 +60,23 @@
             echo "== zizmor"
             # A directory other than .github/workflows yields nothing to zizmor; name the templates.
             zizmor --offline --no-progress .github/workflows templates/*.yml
-            echo "== zizmor-ignores.awk: a copy without the ignore comments gets them back"
+            echo "== zizmor-ignores.awk: a copy gets the comments back, once; other files are left alone"
             for t in templates/*.yml; do
               sed -E 's/ +# zizmor: ignore\[.*$//' "$t" > "$HOME/bare.yml"
-              awk -f scripts/zizmor-ignores.awk "$t" "$HOME/bare.yml" | diff -u "$t" -
-              awk -f scripts/zizmor-ignores.awk "$t" "$t" | diff -u "$t" -
+              awk -f scripts/zizmor-ignores.awk "$t" "$HOME/bare.yml" > "$HOME/out.yml"
+              diff -u "$t" "$HOME/out.yml"
+              if awk -f scripts/zizmor-ignores.awk "$t" "$t" > "$HOME/out.yml"; then
+                echo "$t: コメントがすでにあるのに、足したことになった"
+                exit 1
+              fi
+              diff -u "$t" "$HOME/out.yml"
+              # Not a copy: the same lines, without the template's uses: line.
+              grep -v 'uses: shiroinock/workflows/' "$HOME/bare.yml" > "$HOME/other.yml"
+              if awk -f scripts/zizmor-ignores.awk "$t" "$HOME/other.yml" > "$HOME/out.yml"; then
+                echo "$t: 写しでないファイルにコメントを足した"
+                exit 1
+              fi
+              diff -u "$HOME/other.yml" "$HOME/out.yml"
             done
             echo "== pinact: actions pinned to a commit"
             pinact run --check
