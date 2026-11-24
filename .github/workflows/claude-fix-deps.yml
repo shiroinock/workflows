@@ -323,7 +323,7 @@ jobs:
 
             ## 手順
             1. リポジトリの `AGENTS.md`・`CLAUDE.md`・`CONTRIBUTING.md` を読み、決まりを知る(無いものは飛ばす)。
-            2. `gh pr view ${{ needs.triage.outputs.pr }} --comments` と `gh api repos/${{ github.repository }}/pulls/${{ needs.triage.outputs.pr }}/comments` で、レビューのまとめと行コメントを読む。落ちた検査は下の一覧のとおりです。Claude のレビュー以外で、GitHub Actions のもの(URL が `/actions/runs/<id>/` を含む)は `gh run view <id> --log-failed` で読む。`gh pr diff ${{ needs.triage.outputs.pr }}` で、どの依存をどこからどこへ上げたかを読む。
+            2. `gh pr view ${{ needs.triage.outputs.pr }} --comments` と `gh api repos/${{ github.repository }}/pulls/${{ needs.triage.outputs.pr }}/comments` で、レビューのまとめと行コメントを読む。落ちた検査は上の一覧のとおりです。Claude のレビュー以外で、GitHub Actions のもの(URL が `/actions/runs/<id>/` を含む)は `gh run view <id> --log-failed` で読む。`gh pr diff ${{ needs.triage.outputs.pr }}` で、どの依存をどこからどこへ上げたかを読む。
             3. 止めている理由ごとに、本物かをコードと lock ファイルに戻って確かめ、直す。たとえば次のもの。
                - 更新に合わせて、ソースや設定(`vite.config.ts` など)を直す。
                - 一緒に上げるべき依存を、合う版に上げる(peer の範囲は `npm view <pkg>@<version> peerDependencies` で確かめる)。
@@ -393,6 +393,7 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+          CLAUDE_USED: ${{ steps.usage.outputs.has }}
           RESULT: ${{ steps.claude.outputs.structured_output }}
         run: |
           marker="<!-- claude-fix-deps sha=$SHA -->"
@@ -411,11 +412,13 @@ jobs:
           if [ "$(gh pr view "$PR" --json headRefOid --jq .headRefOid)" != "$SHA" ]; then
             echo "知らせない:直しているあいだに枝が進んだので、新しい検査に任せる"; exit 0
           fi
-          # The job itself failed before Claude answered (the action refused, a timeout): not a
-          # go, and not the PR's fault. Say so without handing the PR over; the next commit of
-          # the PR is tried again.
-          if [ "$CLAUDE_OUTCOME" != success ] && [ -z "$result" ]; then
-            gh pr comment "$PR" --body "$(printf '<!-- claude-fix-deps-error sha=%s -->\n@%s 依存の更新を直すジョブが、Claude の答えを待たずに失敗しました（%s）。workflow の側の問題かもしれません。実行のログを見てください。\n\n直しにいった回数には数えません。この PR に次のコミットが来たら、また動きます。' "$SHA" "$OWNER" "$RUN_URL")"
+          # The job failed before Claude ran at all (the action refused, setup broke): nothing was
+          # spent on the PR, and it is not the PR's fault. Say so without counting a go or handing
+          # the PR over; the next commit of the PR is tried again. Told by the usage receiver
+          # having got nothing. Once Claude ran (even into a timeout), it is a go as before, so
+          # max_attempts still stops a PR that keeps failing.
+          if [ "$CLAUDE_OUTCOME" != success ] && [ "$CLAUDE_USED" != true ]; then
+            gh pr comment "$PR" --body "$(printf '<!-- claude-fix-deps-error sha=%s -->\n@%s 依存の更新を直すジョブが、Claude が動く前に失敗しました（%s）。workflow の側の問題かもしれません。実行のログを見てください。\n\n直しにいった回数には数えません。この PR に次のコミットが来たら、また動きます。' "$SHA" "$OWNER" "$RUN_URL")"
             exit 0
           fi
           if [ "$result" = needs_human ]; then
