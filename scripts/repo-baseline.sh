@@ -13,7 +13,9 @@
 #     空のリポジトリには最初のコミットとして入れ、中身のあるリポジトリには PR を出す。
 #     その PR が開いたままなら、今の既定ブランチの上に作り直し、今のテンプレートに合わせる(中身が
 #     同じなら触らない)。PR がテンプレートの置き場所のほかのファイル(.github/baseline-skip など)を
-#     変えていれば、人の手が入ったものとして触らない。
+#     変えていれば、人の手が入ったものとして触らない(配らなくなったテンプレートの置き場所は除き、作り直すときに外す)。
+#     共通のジョブをすべて同じ SHA で固定しているリポジトリには、新しい写しも同じ SHA で入れる。
+#     その SHA にまだ無いジョブは、Renovate が SHA を上げるまで入れない。
 #     リポジトリの .github/baseline-skip に書いたテンプレート(1行に1つ、templates/ のファイル名)と、
 #     閉じた(マージしなかった)PR に入っていたファイルは、もう入れない。
 #   - シークレット CLAUDE_CODE_OAUTH_TOKEN:無ければ 1Password から入れる(op が使えるときだけ)。
@@ -50,6 +52,9 @@ CLAUDE_TOKEN_OP_REF="${CLAUDE_TOKEN_OP_REF:-op://AI-Shared/6kqqyn7mxdgvbx64e5gqi
 RULESET_NAME="main を守る"
 BRANCH="chore/common-workflows"
 SKIP_TOPIC="no-baseline"
+# Templates no longer handed out. An open PR made before still holds them; they count as the
+# templates' places, so that PR is made again without them rather than taken as a person's.
+RETIRED_TEMPLATES=(static-rules.yml)
 
 if [ "$#" -gt 0 ]; then
   repos=("$@")
@@ -95,7 +100,7 @@ dest_of() {
 }
 
 # The template as it goes into this repository.
-render() { # <template file> <private>
+render() { # <template file> <private> [<SHA the repository pins the shared jobs to>]
   if [ "$2" = true ] && [ "$(basename "$1")" = merge-reservation.yml ]; then
     # Drop the schedule, its cron line and the comments just above it; a private repository pays
     # for every run.
@@ -107,7 +112,45 @@ render() { # <template file> <private>
       END { printf "%s", held }' "$1"
   else
     cat "$1"
+  fi | pin "${3:-}"
+}
+
+# A repository that pins its copies to a SHA gets the new ones pinned to the same SHA, with
+# workflows_ref where the job takes it; Renovate then raises them all together. Without a SHA, the
+# template goes in as it is (@main).
+pin() { # <SHA or empty>
+  if [ -z "$1" ]; then
+    cat
+    return
   fi
+  awk -v sha="$1" '
+    { line[++n] = $0; if (index($0, "workflows_ref: <SHA>")) takes_ref = 1 }
+    END {
+      for (i = 1; i <= n; i++) {
+        l = line[i]
+        if (l ~ /^# The jobs? (itself )?lives? in shiroinock\/workflows; change (it|them) there, not here\.$/) {
+          print l
+          print "# Pinned to a commit that was read, like the other workflows that call it; Renovate raises"
+          print "# the SHA in all of them together."
+          continue
+        }
+        if (match(l, /^ *uses: shiroinock\/workflows\/[^@]+@main/)) {
+          print substr(l, 1, RLENGTH - 4) sha
+          continue
+        }
+        if (takes_ref && l == "    # with:") { print "    with:"; continue }
+        if (takes_ref && l ~ /^    #   workflows_ref: <SHA>/) { print "      workflows_ref: " sha; continue }
+        print l
+      }
+    }'
+}
+
+# The SHA the repository's copies call the shared jobs at, when they all agree on one; empty when
+# they follow main, or mix refs (then the new copies follow the template).
+pinned_sha() { # <directory with the copies>
+  local refs
+  refs=$(grep -ho 'uses: shiroinock/workflows/[^@ ]*@[^ ]*' "$1"/* 2>/dev/null | sed 's/.*@//' | sort -u)
+  [ "$(grep -c . <<<"$refs")" = 1 ] && grep -xE '[0-9a-f]{40}' <<<"$refs"
 }
 
 # 0: the API answered; 1: it answered with the given status (the "not there" case); 2: any other
@@ -168,8 +211,9 @@ declined() { # <repo> <ref>
 
 workflows_step() { # <full> <private> <default branch> <empty>
   local full=$1 private=$2 default=$3 empty=$4 t dest r skip=""
-  local files=() updated=()
-  rm -rf "$work/updated"
+  local files=() updated=() sha=""
+  rm -rf "$work/updated" "$work/copies"
+  mkdir -p "$work/copies"
   if [ "$empty" = false ]; then
     if ! skip=$(declined "$full" "$default"); then
       fail "   共通のワークフロー: 断ったものを読めなかったので飛ばす"
@@ -194,6 +238,7 @@ workflows_step() { # <full> <private> <default branch> <empty>
           fail "   共通のワークフロー: $dest を読めなかったので飛ばす"
           return
         fi
+        cp "$work/current" "$work/copies/$(basename "$dest")"
         mkdir -p "$work/updated/$(dirname "$dest")"
         # Exits 0 only when it added a comment; a copy of another origin is left alone.
         awk -f "$ZIZMOR_IGNORES_AWK" "$t" "$work/current" > "$work/updated/$dest" && updated+=("$dest")
@@ -219,6 +264,26 @@ workflows_step() { # <full> <private> <default branch> <empty>
     fi
     files+=("$t")
   done
+  # Copies pinned to one SHA: the new ones go in at that SHA, and only the jobs it already has. A
+  # job added to shiroinock/workflows after it waits until Renovate raises the SHA.
+  sha=$(pinned_sha "$work/copies")
+  if [ -n "$sha" ] && [ "${#files[@]}" -gt 0 ]; then
+    local kept=() job
+    for t in "${files[@]}"; do
+      job=$(grep -om1 'shiroinock/workflows/[^@ ]*@' "$t" | sed 's|^shiroinock/workflows/||; s|@$||')
+      if [ -z "$job" ]; then
+        kept+=("$t")
+        continue
+      fi
+      probe "repos/shiroinock/workflows/contents/$job?ref=$sha" 404
+      case $? in
+        0) kept+=("$t") ;;
+        1) echo "   共通のワークフロー: $(basename "$t") は、固定した ${sha:0:7} にまだ無いので入れない(Renovate が SHA を上げたあとで入れる)" ;;
+        *) fail "   共通のワークフロー: $(basename "$t") が ${sha:0:7} にあるか確かめられなかったので飛ばす" ;;
+      esac
+    done
+    files=("${kept[@]}")
+  fi
   if [ "${#files[@]}" -eq 0 ] && [ "${#updated[@]}" -eq 0 ]; then
     echo "   共通のワークフロー: そろっている"
     return
@@ -258,7 +323,7 @@ workflows_step() { # <full> <private> <default branch> <empty>
   for t in "${files[@]}"; do
     dest=$(dest_of "$(basename "$t")")
     mkdir -p "$work/want/$(dirname "$dest")"
-    render "$t" "$private" > "$work/want/$dest"
+    render "$t" "$private" "$sha" > "$work/want/$dest"
   done
   for dest in "${updated[@]}"; do
     mkdir -p "$work/want/$(dirname "$dest")"
@@ -273,15 +338,15 @@ workflows_step() { # <full> <private> <default branch> <empty>
   if [ -n "$pr" ]; then
     # The open PR is made again on the current default branch, so it carries what the templates are
     # now (the zizmor comments, say) and runs the checks the branch asks for now. Not when it
-    # changes a file outside the templates' places (a .github/baseline-skip a person wrote), and not
-    # when it already holds the same.
+    # changes a file outside the templates' places (a .github/baseline-skip a person wrote; a retired
+    # template's place counts as theirs, and is left out), and not when it already holds the same.
     local pr_files all_dests
     if ! pr_files=$(gh api --paginate "repos/$full/pulls/$pr/files" --jq '.[].filename' 2>/dev/null); then
       fail "   共通のワークフロー: PR #$pr のファイルを読めなかったので飛ばす"
       return
     fi
     pr_files=$(sort <<<"$pr_files")
-    all_dests=$(for t in "$TEMPLATES_DIR"/*; do dest_of "$(basename "$t")"; done | sort)
+    all_dests=$(for t in "$TEMPLATES_DIR"/* "${RETIRED_TEMPLATES[@]}"; do dest_of "$(basename "$t")"; done | sort)
     if [ -n "$(comm -23 <(grep . <<<"$pr_files") <(grep . <<<"$all_dests"))" ]; then
       echo "   共通のワークフロー: 足りない($names)。PR #$pr はテンプレートのほかのファイルも変えているので、触らない"
       return
@@ -332,7 +397,9 @@ workflows_step() { # <full> <private> <default branch> <empty>
       return
     fi
   fi
-  local body dept_note=""
+  local body dept_note="" pin_note=""
+  [ -n "$sha" ] && [ "${#files[@]}" -gt 0 ] && pin_note="
+- このリポジトリは共通のジョブを SHA で固定しているので、入れる写しも同じ \`$sha\` に固定しています(Renovate がまとめて上げます)。"
   for t in "${files[@]}"; do
     [ "$(basename "$t")" = dept.yml ] || continue
     dept_note="
@@ -355,7 +422,7 @@ $(for dest in "${updated[@]}"; do echo "- \`$dest\`"; done)
 "
   body="shiroinock/workflows の \`templates/\` に合わせます(\`repo-baseline\` が出した PR です)。
 $added_list$updated_list
-- すでにあるファイルは、上の zizmor のコメントのほかは書き換えていません。
+- すでにあるファイルは、上の zizmor のコメントのほかは書き換えていません。$pin_note
 - \`.github/workflows\` を変える PR なので、Claude のレビューは走りません。手で見てマージします。
 - 開いている間は、見回りがこの PR を今の既定ブランチと今のテンプレートに合わせて作り直します(中身が同じなら触りません)。このブランチでテンプレートの写しを書き換えても、作り直すと戻ります。
 - 入れたくないものは、このブランチで消し、そのファイル名(\`templates/\` での名前、例 \`claude-fix-ci.yml\`)を \`.github/baseline-skip\` に1行ずつ書いてからマージします。書かないと、次の見回りでまた入れる PR が出ます。
